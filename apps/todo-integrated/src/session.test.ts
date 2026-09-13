@@ -143,10 +143,10 @@ test("未保存の会話は最初の描画では空で、準備中になる", as
   assert.equal(result.creating, true);
 });
 
-test("session.ts と session.css はコピー先4アプリで同じ内容にする", () => {
+test("session.ts と session.css はコピー先6アプリで同じ内容にする", () => {
   for (const file of ["session.ts", "session.css"]) {
     const base = readFileSync(new URL(`./${file}`, import.meta.url), "utf8");
-    for (const app of ["todo", "map-coffee", "ec-coffee"]) {
+    for (const app of ["todo", "map", "ec", "map-coffee", "ec-coffee"]) {
       assert.equal(
         readFileSync(new URL(`../../${app}/src/${file}`, import.meta.url), "utf8"),
         base,

@@ -117,7 +117,7 @@ APIキーはルートの `.env.local` の `SUBAKO_API_KEY` に置きます。`VI
 ```diff
 --- apps/todo/src/App.tsx
 +++ apps/todo-integrated/src/App.tsx
-@@ -1,13 +1,61 @@
+@@ -1,67 +1,61 @@
  import { useEffect, useRef, useState, type FormEvent } from "react";
 +import { z } from "zod";
 +import { SubakoSessionClient } from "@subako-ai/sdk";
@@ -129,6 +129,18 @@ APIキーはルートの `.env.local` の `SUBAKO_API_KEY` に置きます。`VI
  import data from "./data.json";
  import "./style.css";
  import "./layout.css";
+-import "./session.css";
+-
+-// ──────────────────────────────────────────────────────────────
+-// TODO ① SDKと、同じフォルダの session.ts をimportする
+-//    session.ts は最初から置いてあります。先に npm install を済ませてください。
+-//    session.css はサイドバーの枠に使うので、すでに上でimportしています。
+-// ──────────────────────────────────────────────────────────────
+-// import { z } from "zod";
+-// import { SubakoSessionClient } from "@subako-ai/sdk";
+-// import { SubakoProvider, useSession, useTool, useToolClient } from "@subako-ai/react";
+-// import { SubakoChat } from "@subako-ai/assistant-ui";
+-// import { fetchSessionToken, useSessionId } from "./session";
  
  const initialItems: Todo[] = parseTodos(data);
 -const storageKey = "hackathon:todo";
@@ -137,7 +149,14 @@ APIキーはルートの `.env.local` の `SUBAKO_API_KEY` に置きます。`VI
 +const sessionStorageKey = `hackathon:session:todo-integrated:${baseUrl}`;
 +// APIキーは持ちません。会話ごとのtokenを開発サーバーから受け取ります。
 +const subako = new SubakoSessionClient({ baseUrl, getToken: fetchSessionToken });
-+
+ 
+-// ──────────────────────────────────────────────────────────────
+-// TODO ② 会話につなぐクライアントを用意する
+-//    APIキーは持ちません。会話ごとのtokenを開発サーバーから受け取ります。
+-// ──────────────────────────────────────────────────────────────
+-// const baseUrl = import.meta.env.VITE_SUBAKO_BASE_URL || "https://api.us.cloud.subako.ai";
+-// const sessionStorageKey = `hackathon:session:todo:${baseUrl}`;
+-// const subako = new SubakoSessionClient({ baseUrl, getToken: fetchSessionToken });
 +function Assistant({ getItems, add, complete, sessionId, creating, error, onNew }: {
 +  getItems: () => Todo[];
 +  add: (title: string) => Todo;
@@ -149,7 +168,40 @@ APIキーはルートの `.env.local` の `SUBAKO_API_KEY` に置きます。`VI
 +}) {
 +  const session = useSession(sessionId);
 +  const client = useToolClient(session, "todo");
-+
+ 
+-// ──────────────────────────────────────────────────────────────
+-// TODO ③ 会話を担当するコンポーネントを追加する
+-//    execute の中身は、フォームが使っている add() をそのまま呼ぶだけです。
+-// ──────────────────────────────────────────────────────────────
+-// function TodoAssistant({ getItems, add, complete, sessionId }: {
+-//   getItems: () => Todo[];
+-//   add: (title: string) => Todo;
+-//   complete: (id: string, done: boolean) => Todo;
+-//   sessionId: string;
+-// }) {
+-//   const session = useSession(sessionId);
+-//   const client = useToolClient(session, "todo");
+-//
+-//   useTool(client, "list_todos", {
+-//     description: "現在のTODOを取得する。",
+-//     schema: z.object({}).strict(),
+-//     execute: () => JSON.stringify(getItems()),
+-//   });
+-//
+-//   useTool(client, "add_todo", {
+-//     description: "TODOを1件追加する。",
+-//     schema: z.object({ title: z.string().max(300).trim().min(1) }).strict(),
+-//     execute: ({ title }) => JSON.stringify(add(title)),
+-//   });
+-//
+-//   // TODO ④ ここに完了ツールを足す。ここだけ雛形がありません。
+-//   //   ツール名  set_todo_done
+-//   //   説明      一覧で取得したidのTODOを完了・未完了にする。
+-//   //   引数      id: string / done: boolean
+-//   //   execute   complete(id, done) を呼び、JSON.stringify で返す
+-//
+-//   return <SubakoChat session={session} />;
+-// }
 +  useTool(client, "list_todos", {
 +    description: "現在のTODO一覧を取得します。",
 +    schema: z.object({}).strict(),
@@ -180,26 +232,50 @@ APIキーはルートの `.env.local` の `SUBAKO_API_KEY` に置きます。`VI
    const [initial] = useState(() => {
      try {
        const saved = localStorage.getItem(storageKey);
-@@ -68,7 +116,7 @@ export default function App() {
-     }
-   }
-   return (
--    <div className="app-layout">
-+    <div className="app-layout has-session">
-       <div className="app-panel">
-         <div className="app-content">
-           <div className="todo-shell">
-@@ -184,6 +232,32 @@ export default function App() {
+@@ -75,12 +69,6 @@ export default function App() {
+   const [error, setError] = useState(initial.error);
+   const [title, setTitle] = useState("");
+   const [filter, setFilter] = useState<"all" | "active" | "done">("all");
+-
+-  // ──────────────────────────────────────────────────────────────
+-  // TODO ⑤ 使う会話を用意する
+-  //    保存済みの会話があれば続きから、無ければ新しく作ります。
+-  // ──────────────────────────────────────────────────────────────
+-  // const { sessionId } = useSessionId(sessionStorageKey);
+   const active = items.filter((item) => !item.done).length;
+   const visible = items.filter(
+     (item) => filter === "all" || (filter === "done" ? item.done : !item.done),
+@@ -244,31 +232,30 @@ export default function App() {
            </div>
          </div>
        </div>
-+      <aside className="session-sidebar" aria-label="TODOアシスタント">
+-
+       <aside className="session-sidebar" aria-label="TODOアシスタント">
+-        <header className="session-header">
 +        <header>
 +          <span>SUBAKO / SESSION</span>
-+          <h2>TODOアシスタント</h2>
-+          <p>会話しながら、アプリを操作できます。</p>
-+        </header>
-+        <div className="session-content">
+           <h2>TODOアシスタント</h2>
+           <p>会話しながら、アプリを操作できます。</p>
+         </header>
+         <div className="session-content">
+-          <p>ここに会話が入ります。</p>
+-          {/*
+-            TODO ⑥ 上の <p> を消して、ここから下を有効にします。
+-
+-            {sessionId ? (
+-              <SubakoProvider client={subako}>
+-                <TodoAssistant
+-                  key={sessionId}
+-                  getItems={getItems}
+-                  add={add}
+-                  complete={complete}
+-                  sessionId={sessionId}
+-                />
+-              </SubakoProvider>
+-            ) : (
+-              <p>会話を準備しています…</p>
+-            )}
+-          */}
 +          {connectionError && <p className="session-error" role="alert">{connectionError}</p>}
 +          {sessionId ? (
 +            <SubakoProvider client={subako} onError={() => setConnectionError("接続できません。agentのOrigin設定と開発サーバーを確認してください。") }>
@@ -217,11 +293,9 @@ APIキーはルートの `.env.local` の `SUBAKO_API_KEY` に置きます。`VI
 +          ) : (
 +            <SessionPending creating={creating} error={sessionError} onRetry={startNew} />
 +          )}
-+        </div>
-+      </aside>
+         </div>
+       </aside>
      </div>
-   );
- }
 ```
 
 </details>
@@ -300,8 +374,8 @@ APIキーはルートの `.env.local` の `SUBAKO_API_KEY` に置きます。`VI
 | ファイル | 変更内容 |
 | --- | --- |
 | `package.json`・`src/App.tsx` | SDK・Zodの依存、接続、ツール、会話の表示を追加 |
-| `src/session.ts`（追加） | 会話の作成・localStorage・tokenの受け取り。全文は[追加UIの差分](#session-answer) |
-| `src/session.css`・`src/SessionControls.tsx`（追加） | 会話用のCSSと追加UI。全文は[追加UIの差分](#session-answer) |
+| `src/session.ts`・`src/session.css` | スターターにも最初から置いてあります。importして使うだけです |
+| `src/SessionControls.tsx`（追加） | 会話の切り替えUI。全文は[追加UIの差分](#session-answer) |
 | `vite.config.ts` | 新しいセッションを作るAPIを追加 |
 | `src/CatalogView.tsx`・`src/style.css` | 完成例側の文言・商品イラストをコーヒー向けに編集 |
 | `src/useCatalog.ts` | 再描画前の現在値をツールから読む `getState()` を追加 |
@@ -354,7 +428,7 @@ SDK導入時は自分の `data/catalog.json`・`initialData`・`CatalogView` を
 ```diff
 --- apps/ec/src/App.tsx
 +++ apps/ec-coffee/src/App.tsx
-@@ -1,24 +1,189 @@
+@@ -1,15 +1,153 @@
 +import { useMemo, useState } from "react";
 +import { z } from "zod";
 +import { SubakoSessionClient } from "@subako-ai/sdk";
@@ -510,20 +584,22 @@ SDK導入時は自分の `data/catalog.json`・`initialData`・`CatalogView` を
 +  );
  
    return (
--    <div className="app-layout">
-+    <div className="app-layout has-session">
-       <div className="app-panel">
-         <div className="app-content">
-           <CatalogView store={catalog} />
+     <div className="app-layout has-session">
+@@ -19,14 +157,31 @@ export default function App() {
          </div>
          <div id="app-dialogs" className="app-dialog-host" />
        </div>
+-
+-      <aside className="session-sidebar" aria-label="ショップアシスタント">
 +      <aside className="session-sidebar" aria-label="アシスタント">
-+        <header className="session-header">
+         <header className="session-header">
+-          <h2>ショップアシスタント</h2>
+-          <p>会話しながら、商品を探せます。</p>
 +          <h2>いっしょに、選ぼう。</h2>
 +          <p>好みや予算から、ぴったりの組み合わせを。</p>
-+        </header>
-+        <div className="session-content">
+         </header>
+         <div className="session-content">
+-          <p>ここに会話が入ります。TODOと同じ手順で、SubakoProvider と会話用のコンポーネントを置きます。</p>
 +          {sessionId ? (
 +            <SubakoProvider
 +              key={sessionId}
@@ -543,11 +619,9 @@ SDK導入時は自分の `data/catalog.json`・`initialData`・`CatalogView` を
 +          ) : (
 +            <SessionPending creating={creating} error={sessionError} onRetry={startNew} />
 +          )}
-+        </div>
-+      </aside>
+         </div>
+       </aside>
      </div>
-   );
- }
 ```
 
 </details>
@@ -861,8 +935,8 @@ SDK導入時は自分の `data/catalog.json`・`initialData`・`CatalogView` を
 | ファイル | 変更内容 |
 | --- | --- |
 | `package.json`・`src/App.tsx` | SDK・Zodの依存、接続、ツール、会話の表示を追加 |
-| `src/session.ts`（追加） | 会話の作成・localStorage・tokenの受け取り。全文は[追加UIの差分](#session-answer) |
-| `src/session.css`・`src/SessionControls.tsx`（追加） | 会話用のCSSと追加UI。全文は[追加UIの差分](#session-answer) |
+| `src/session.ts`・`src/session.css` | スターターにも最初から置いてあります。importして使うだけです |
+| `src/SessionControls.tsx`（追加） | 会話の切り替えUI。全文は[追加UIの差分](#session-answer) |
 | `vite.config.ts` | 新しいセッションを作るAPIを追加 |
 | `src/domain.ts`・`src/use-map-app.ts`・`src/map-canvas.tsx`・`src/map-view.tsx`・`src/domain.test.ts` | 完成例側に保存済み徒歩経路の計算・描画・表示とテストを追加 |
 | `src/use-map-app.ts` | 再描画前の現在値をツールから読む `getState()` も追加 |
@@ -923,7 +997,7 @@ Mapの既定の出発地は画面にも表示している渋谷駅です。座�
 ```diff
 --- apps/map/src/App.tsx
 +++ apps/map-coffee/src/App.tsx
-@@ -1,25 +1,139 @@
+@@ -1,12 +1,98 @@
 +import { useMemo, useState } from "react";
 +import { z } from "zod";
 +import { SubakoSessionClient } from "@subako-ai/sdk";
@@ -1024,9 +1098,8 @@ Mapの既定の出発地は画面にも表示している渋谷駅です。座�
 +  );
  
    return (
--    <div className="app-layout">
-+    <div className="app-layout has-session">
-       <div className="app-panel">
+     <div className="app-layout has-session">
+@@ -14,20 +100,38 @@ export default function App() {
          <div className="app-content">
            <MapView
              app={app}
@@ -1038,12 +1111,18 @@ Mapの既定の出発地は画面にも表示している渋谷駅です。座�
          </div>
          <div id="app-dialogs" className="app-dialog-host" />
        </div>
+-
+-      <aside className="session-sidebar" aria-label="マップアシスタント">
+-        <header className="session-header">
+-          <h2>マップアシスタント</h2>
+-          <p>会話しながら、地図を動かせます。</p>
 +      <aside className="session-sidebar" aria-label="寄り道の相談室">
 +        <header>
 +          <h2>寄り道の相談室</h2>
 +          <p>好みや空き時間から、一緒に考えます。</p>
-+        </header>
-+        <div className="session-content">
+         </header>
+         <div className="session-content">
+-          <p>ここに会話が入ります。TODOと同じ手順で、SubakoProvider と会話用のコンポーネントを置きます。</p>
 +          {connectionError && (
 +            <div className="session-notice session-error" role="alert">
 +              {connectionError}
@@ -1064,11 +1143,9 @@ Mapの既定の出発地は画面にも表示している渋谷駅です。座�
 +          ) : (
 +            <SessionPending creating={creating} error={sessionError} onRetry={startNew} />
 +          )}
-+        </div>
-+      </aside>
+         </div>
+       </aside>
      </div>
-   );
- }
 ```
 
 </details>
@@ -1409,13 +1486,13 @@ Mapの既定の出発地は画面にも表示している渋谷駅です。座�
 
 ## 追加UI：会話のサイドバーと新しいセッション
 
-`session.ts`・`SessionControls.tsx`・`session.css` は完成例3つで同じ内容です。うち `session.ts` と `session.css` は、スターターの `apps/todo` にも最初から置いてあります。以下にはTODO版を代表として載せます。
+`session.ts`・`SessionControls.tsx`・`session.css` は完成例3つで同じ内容です。うち `session.ts` と `session.css` は、スターター3つ（`todo` / `map` / `ec`）にも最初から置いてあります。サイドバーの枠も最初からあり、`session-content` の中身を差し替えるだけです。以下にはTODO版を代表として載せます。
 
 | 追加部分 | 役割 | 最小の連携での扱い |
 | --- | --- | --- |
 | `session.ts` の `useSessionId` | 会話を作り、IDを `localStorage` に覚え、次回は続きから | **最小の連携から必要** |
 | `session.ts` の `fetchSessionToken` | 接続用のtokenを受け取る。`SubakoSessionClient` が期限切れのたびに呼ぶ | **最小の連携から必要** |
-| `session.css` | アプリと会話の表示領域を分ける | `apps/todo` には配置済み。importするだけ |
+| `session.css` | アプリと会話の表示領域を分ける | スターターで配置・import 済み |
 | `SessionControls` | 「新しいセッション」で会話を作り直す | 後から追加できる |
 | `SessionPending` | 会話ができるまでの表示と、失敗時の再試行 | 後から追加できる |
 | `SafeToolResult` | 短い操作表示・失敗状態・SDKの承認ボタンを表示 | 必要に応じて `SubakoChat` の `components` に渡す |

@@ -3,17 +3,18 @@ import { createTodo, parseTodos, setTodoDone, type Todo } from "./model";
 import data from "./data.json";
 import "./style.css";
 import "./layout.css";
+import "./session.css";
 
 // ──────────────────────────────────────────────────────────────
-// TODO ① SDKと、同じフォルダの session.ts・session.css をimportする
-//    session.ts と session.css は最初から置いてあります。npm install だけ先に。
+// TODO ① SDKと、同じフォルダの session.ts をimportする
+//    session.ts は最初から置いてあります。先に npm install を済ませてください。
+//    session.css はサイドバーの枠に使うので、すでに上でimportしています。
 // ──────────────────────────────────────────────────────────────
 // import { z } from "zod";
 // import { SubakoSessionClient } from "@subako-ai/sdk";
 // import { SubakoProvider, useSession, useTool, useToolClient } from "@subako-ai/react";
 // import { SubakoChat } from "@subako-ai/assistant-ui";
 // import { fetchSessionToken, useSessionId } from "./session";
-// import "./session.css";
 
 const initialItems: Todo[] = parseTodos(data);
 const storageKey = "hackathon:todo";
@@ -127,9 +128,7 @@ export default function App() {
     }
   }
   return (
-    // TODO ⑥-1 サイドバーを出すため、下の app-layout に has-session を足す
-    //    <div className="app-layout has-session">
-    <div className="app-layout">
+    <div className="app-layout has-session">
       <div className="app-panel">
         <div className="app-content">
           <div className="todo-shell">
@@ -245,15 +244,17 @@ export default function App() {
           </div>
         </div>
       </div>
-      {/*
-        TODO ⑥-2 会話のサイドバーを置く。app-panel の直後、app-layout の中です。
 
-        <aside className="session-sidebar" aria-label="TODOアシスタント">
-          <header className="session-header">
-            <h2>TODOアシスタント</h2>
-            <p>会話しながら、アプリを操作できます。</p>
-          </header>
-          <div className="session-content">
+      <aside className="session-sidebar" aria-label="TODOアシスタント">
+        <header className="session-header">
+          <h2>TODOアシスタント</h2>
+          <p>会話しながら、アプリを操作できます。</p>
+        </header>
+        <div className="session-content">
+          <p>ここに会話が入ります。</p>
+          {/*
+            TODO ⑥ 上の <p> を消して、ここから下を有効にします。
+
             {sessionId ? (
               <SubakoProvider client={subako}>
                 <TodoAssistant
@@ -267,9 +268,9 @@ export default function App() {
             ) : (
               <p>会話を準備しています…</p>
             )}
-          </div>
-        </aside>
-      */}
+          */}
+        </div>
+      </aside>
     </div>
   );
 }
