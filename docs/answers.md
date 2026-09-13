@@ -1,0 +1,1630 @@
+# 解答編：スターターから完成例への差分
+
+[参加者用ワークシートに戻る](../README.md)
+
+「普通のReactアプリのどこにSubakoを足したか」を答え合わせするための資料です。各節の折りたたみには、**このリポジトリの実ファイルから取得したdiff**を載せています。`+` は追加、`-` は削除、行頭が空白の行は変更していない前後のコードです。
+
+| 題材 | スターター | 完成例 | この資料 |
+| --- | --- | --- | --- |
+| TODO | [`apps/todo`](../apps/todo) | [`apps/todo-integrated`](../apps/todo-integrated) | [TODOの差分](#todo-answer) |
+| EC | [`apps/ec`](../apps/ec) | [`apps/ec-coffee`](../apps/ec-coffee) | [ECの差分](#ec-answer) |
+| Map | [`apps/map`](../apps/map) | [`apps/map-coffee`](../apps/map-coffee) | [Mapの差分](#map-answer) |
+
+スターターには汎用の初期データがあります。TODOは[作業3件](../apps/todo/src/data.json)、ECは[商品A〜D](../apps/ec/data/catalog.json)、Mapは[架空の地点A〜D](../apps/map/src/data.json)です。SDKを追加する前から、これらのデータで手動操作を試せます。JSONは保存データがないときの初期データです。操作状態は `localStorage` に保存され、再読み込み後も引き継ぎます。JSONを編集しても、保存済みのデータは自動で上書きされません。
+
+## まず見るところ
+
+3組とも、次の順序で読みます。
+
+1. **SDKをインストールする。** `package.json` にSubako・assistant-ui・Zodの依存を追加します。
+2. **会話につなぐ。** `SubakoClient` → `SubakoProvider` → `useSession` で、publish後に作成したセッションを使います。
+3. **既存の操作を登録する。** `useToolClient` と `useTool` を追加し、`execute` から今のstateを読むか、ボタンでも使っている関数を呼びます。
+4. **会話を表示する。** 既存画面の隣にサイドバーを置き、`SubakoChat` にセッションを渡します。
+5. **必要な追加UIを足す。** 完成例には新しいセッションのボタン、接続エラー表示、ツール結果の表示調整もあります。
+
+引数は `schema: z.object({ ... }).strict()` で定義します。`.strict()` は未定義の引数を拒否し、`.default()` は省略時の値、`.optional()` は省略できる項目を表します。`execute` の引数の型もZodから推論されます。
+
+ツールの名前・説明・引数は、連携版の `App.tsx` で初めて定義しています。スターターのstateや操作関数を、エージェント用の仕組みに置き換える変更はありません。`metadata` も通常のデータの一部で、必要な属性をツールの結果として返すことでエージェントが判断に使えます。
+
+### 自分のスターターに適用するときの設定
+
+以下のdiffは、別ディレクトリに置いた完成例との比較です。スターターを編集している場合は、**そのアプリの名前・ポート・保存キー・環境変数を引き続き使います。** 完成例の値に変えている箇所は、6アプリを並べて動かすための差分です。
+
+| 設定 | TODOを編集 | ECを編集 | Mapを編集 |
+| --- | --- | --- | --- |
+| npmの対象 | `@hackathon/todo` | `@hackathon/ec` | `@hackathon/map` |
+| publish・起動コマンドの引数 | `todo` | `ec` | `map` |
+| ポート | `5173` | `5177` | `5175` |
+| 初期セッションの変数 | `VITE_SUBAKO_SESSION_TODO` | `VITE_SUBAKO_SESSION_EC` | `VITE_SUBAKO_SESSION_MAP` |
+| アプリのデータ保存キー | `hackathon:todo` | `subako-hackathon:ec:v1` | `hackathon-map-v1` |
+| 会話の保存キーのアプリ名 | `todo` | `ec` | `map` |
+
+会話の保存キーは、完成例と同じ `hackathon:session:<アプリ名>:<baseUrl>:<初期session ID>` の形にします。アプリのデータ保存キーとは別です。
+
+CLIの導入、アカウント・workspace・APIキーの準備は[ワークシート](../README.md)を使います。その後、たとえばTODOならルートで次を実行します。EC・Mapは上の表に合わせます。
+
+```sh
+npm install --workspace @hackathon/todo @subako-ai/sdk@0.1.1 @subako-ai/react@0.1.1 @subako-ai/assistant-ui@0.1.1 @assistant-ui/react@0.15.19 @assistant-ui/react-markdown@0.14.15 zod@4.6.4
+npm run agent:publish -- todo
+npm run dev -- todo
+```
+
+APIキーはルートの `.env.local` の `VITE_SUBAKO_API_KEY` からフロントエンドに渡します。`.env.local` はすでにGitの対象外です。publishスクリプトが対象アプリのagent・許可Origin・sessionを準備し、対応する環境変数を更新します。起動済みなら開発サーバーを再起動します。
+
+`package.json` の依存の追加に加え、`npm install` によってルートの `package-lock.json` も更新されます。ルートのSDKは運営が用意したスクリプト用で、未連携アプリ自身にはSDK依存がありません。
+
+<a id="todo-answer"></a>
+
+## TODO：追加フォームとチェックボックスをAIから使う
+
+**解答の中心は、既存の `getItems`・`add`・`complete` を会話コンポーネントへ渡すことです。** `App` 内の起動時の読み込みとブラウザーへの保存処理、追加・完了・削除の関数はそのままです。
+
+| ツール | `execute` が使う既存の値・関数 | アプリで確かめること |
+| --- | --- | --- |
+| `list_todos` | `getItems()` | 手で追加・完了した最新の一覧が返る |
+| `add_todo` | `add(title)` | フォームで追加したときと同じ一覧に増える |
+| `set_todo_done` | `complete(id, done)` | 同じTODOのチェックが切り替わる |
+
+`useToolClient(session, "todo")` でこのアプリのツールを登録し、`useTool` の `execute` が操作結果を返します。`getItems()` は追加・完了・削除でも使う読み取り関数です。連続した操作でも、直前の変更を検証・返却できるよう、アプリ内のrefから現在の一覧を読みます。画面への表示は通常のReact stateで行います。
+
+### 変更するファイル
+
+| ファイル | 変更内容 |
+| --- | --- |
+| `package.json` | SDK・assistant-ui・Zodの追加。`name` の差分は完成例を別アプリとして起動するため |
+| `src/App.tsx` | 接続、3つのツール、サイドバー、会話選択のstateを追加 |
+| `src/session.css`（追加） | サイドバーと会話の見た目 |
+| `src/SessionControls.tsx`（追加） | 新しいセッションとツール結果の表示。全文は[追加UIの差分](#session-answer) |
+| `vite.config.ts` | 新しいセッションを作るAPIを追加。最小のチャット連携では変更不要 |
+
+`src/data.json`・`src/model.ts`・`src/style.css`・`src/layout.css`・`src/main.tsx`・`src/model.test.ts` は、スターターと完成例で同じ内容です。`agents/todo/prompt.md` と `agents/todo-integrated/prompt.md` も同じ指示です。
+
+
+<details>
+<summary>TODO：package.json の実際のdiff</summary>
+
+```diff
+--- apps/todo/package.json
++++ apps/todo-integrated/package.json
+@@ -1,5 +1,5 @@
+ {
+-  "name": "@hackathon/todo",
++  "name": "@hackathon/todo-integrated",
+   "version": "1.0.0",
+   "private": true,
+   "type": "module",
+@@ -9,7 +9,13 @@
+     "typecheck": "tsc --noEmit"
+   },
+   "dependencies": {
++    "@assistant-ui/react": "0.15.19",
++    "@assistant-ui/react-markdown": "0.14.15",
++    "@subako-ai/assistant-ui": "0.1.1",
++    "@subako-ai/react": "0.1.1",
++    "@subako-ai/sdk": "0.1.1",
+     "react": "19.2.0",
+-    "react-dom": "19.2.0"
++    "react-dom": "19.2.0",
++    "zod": "4.6.4"
+   }
+ }
+```
+
+</details>
+
+
+<details>
+<summary>TODO：src/App.tsx の実際のdiff</summary>
+
+```diff
+--- apps/todo/src/App.tsx
++++ apps/todo-integrated/src/App.tsx
+@@ -1,13 +1,64 @@
+ import { useEffect, useRef, useState, type FormEvent } from "react";
++import { z } from "zod";
++import { SubakoClient } from "@subako-ai/sdk";
++import { SubakoProvider, useSession, useTool, useToolClient } from "@subako-ai/react";
++import { SubakoChat } from "@subako-ai/assistant-ui";
++import { loadSessionId, saveSessionId, SessionControls, SafeToolResult } from "./SessionControls";
+ import { createTodo, parseTodos, setTodoDone, type Todo } from "./model";
+ import data from "./data.json";
+ import "./style.css";
+ import "./layout.css";
+ 
+ const initialItems: Todo[] = parseTodos(data);
+-const storageKey = "hackathon:todo";
++const storageKey = "hackathon:todo-integrated";
++const apiKey = import.meta.env.VITE_SUBAKO_API_KEY?.trim();
++const baseUrl = import.meta.env.VITE_SUBAKO_BASE_URL || "https://api.us.cloud.subako.ai";
++const initialSessionId = import.meta.env.VITE_SUBAKO_SESSION_TODO_INTEGRATED?.trim() || "";
++const sessionStorageKey = `hackathon:session:todo-integrated:${baseUrl}:${initialSessionId}`;
++const subako = apiKey ? new SubakoClient({ baseUrl, apiKey }) : null;
++
++function Assistant({ getItems, add, complete, sessionId, onSessionChange }: {
++  getItems: () => Todo[];
++  add: (title: string) => Todo;
++  complete: (id: string, done: boolean) => Todo;
++  sessionId: string;
++  onSessionChange: (id: string) => void;
++}) {
++  const session = useSession(sessionId);
++  const client = useToolClient(session, "todo");
++
++  useTool(client, "list_todos", {
++    description: "現在のTODO一覧を取得します。",
++    schema: z.object({}).strict(),
++    execute: () => JSON.stringify(getItems()),
++  });
++  useTool(client, "add_todo", {
++    description: "TODOを1件追加します。",
++    schema: z.object({ title: z.string().max(300).trim().min(1) }).strict(),
++    // フォームと同じ追加関数を呼びます。
++    execute: ({ title }) => JSON.stringify(add(title)),
++  });
++  useTool(client, "set_todo_done", {
++    description: "指定したTODOを完了・未完了にします。",
++    schema: z.object({ id: z.string(), done: z.boolean() }).strict(),
++    execute: ({ id, done }) => JSON.stringify(complete(id, done)),
++  });
++
++  return (
++    <SessionControls session={session} onSessionChange={onSessionChange}>
++      <SubakoChat session={session} components={{ tools: { Fallback: SafeToolResult } }} />
++    </SessionControls>
++  );
++}
+ 
+ export default function App() {
++  const [sessionId, setSessionId] = useState(() => loadSessionId(sessionStorageKey, initialSessionId));
++  const [connectionError, setConnectionError] = useState("");
++  function changeSession(id: string) {
++    saveSessionId(sessionStorageKey, id);
++    setSessionId(id);
++    setConnectionError("");
++  }
+   const [initial] = useState(() => {
+     try {
+       const saved = localStorage.getItem(storageKey);
+@@ -68,7 +119,7 @@
+     }
+   }
+   return (
+-    <div className="app-layout">
++    <div className="app-layout has-session">
+       <div className="app-panel">
+         <div className="app-content">
+           <div className="todo-shell">
+@@ -184,6 +235,23 @@
+           </div>
+         </div>
+       </div>
++      <aside className="session-sidebar" aria-label="TODOアシスタント">
++        <header>
++          <span>SUBAKO / SESSION</span>
++          <h2>TODOアシスタント</h2>
++          <p>会話しながら、アプリを操作できます。</p>
++        </header>
++        <div className="session-content">
++          {connectionError && <p className="session-error" role="alert">{connectionError}</p>}
++          {subako && sessionId ? (
++            <SubakoProvider client={subako.sessions} onError={() => setConnectionError("接続できません。APIキー・セッション・Originの設定を確認してください。") }>
++              <Assistant key={sessionId} getItems={getItems} add={add} complete={complete} sessionId={sessionId} onSessionChange={changeSession} />
++            </SubakoProvider>
++          ) : (
++            <p>APIキーを設定し、<code>npm run agent:publish -- todo-integrated</code> を実行して再起動してください。</p>
++          )}
++        </div>
++      </aside>
+     </div>
+   );
+ }
+```
+
+</details>
+
+
+<details>
+<summary>TODO：vite.config.ts の実際のdiff</summary>
+
+```diff
+--- apps/todo/vite.config.ts
++++ apps/todo-integrated/vite.config.ts
+@@ -1,19 +1,20 @@
+ import { fileURLToPath } from "node:url";
+ import { defineConfig } from "vite";
+ import react from "@vitejs/plugin-react";
++import { newSessionPlugin } from "../../scripts/new-session.ts";
+ 
+ const envDir = fileURLToPath(new URL("../../", import.meta.url));
+ const codespace = process.env.CODESPACE_NAME;
+ const domain = process.env.GITHUB_CODESPACES_PORT_FORWARDING_DOMAIN;
+-const host = codespace && domain ? `${codespace}-5173.${domain}` : undefined;
++const host = codespace && domain ? `${codespace}-5174.${domain}` : undefined;
+ 
+ export default defineConfig({
+-  plugins: [react()],
++  plugins: [react(), newSessionPlugin({ port: 5174, envDir, allowedOrigin: host ? `https://${host}` : undefined })],
+   envDir,
+-  preview: { port: 5173, strictPort: true },
++  preview: { port: 5174, strictPort: true },
+   server: {
+     host: "0.0.0.0",
+-    port: 5173,
++    port: 5174,
+     strictPort: true,
+     ...(host ? { allowedHosts: [host] } : {}),
+   },
+```
+
+</details>
+
+
+最初は `SessionControls` を使わず、`return <SubakoChat session={session} />` だけでも会話できます。その場合は `session.css` を `App.tsx` で直接importします。完成例では `SessionControls.tsx` がこのCSSをimportしています。3つのツールを残したまま、後から会話の切り替えを追加できます。
+
+- [ ] 手でTODOを1件追加し、AIに現在の一覧を読んでもらえた。
+- [ ] AIで追加したTODOを手で完了にし、その変更をAIの回答に反映できた。
+
+<a id="ec-answer"></a>
+
+## EC：既存のカタログ・比較・カートをAIから使う
+
+**解答の中心は、`useCatalog` が返す `catalog` を会話コンポーネントへ渡すことです。** `CatalogView` と会話が同じカタログのstateと操作関数を使います。
+
+| ツール | `execute` が使う値・関数 | アプリでの役割 |
+| --- | --- | --- |
+| `search_items` | `searchCatalog(catalog.getState().data.items, query, maxPrice)` | 商品検索。検索結果を返し、画面は変えない |
+| `get_item` | `catalog.getState().data.items` | IDで商品の詳細・metadataを取得 |
+| `show_items` | `catalog.showItems(ids)` | 提案した候補を一覧に表示 |
+| `show_all_items` | `catalog.showItems(null)` | 全商品を表示 |
+| `compare_items` | `catalog.compareItems(ids)` | 最大3点を比較パネルに表示 |
+| `get_cart` | `cartSummary(...)` と `catalog.getState()` | 現在の数量・合計・選択状態を読む |
+| `set_cart_quantity` | `catalog.setQuantity(id, quantity)` | 数量を変更 |
+| `replace_cart` | `catalog.replaceCart(lines, maxTotal)` | 在庫・予算を検証してセット全体を変更 |
+| `open_checkout` | `catalog.openCheckout()` | 確認ダイアログを開く。確定は利用者のボタン操作 |
+
+`schema` にZodで引数の形と制約を定義します。SDKがAIへ渡すJSON Schemaを生成し、実行前に引数を検証します。`execute` の引数はそのスキーマから型が推論され、既存のアプリの操作を呼びます。在庫や予算などの業務ルールは、元からあるカタログの関数で検証します。最初は `search_items` と `show_items` の2つを追加すると、検索から画面への反映まで試せます。
+
+完成例の `useCatalog` には `getState()` を追加しています。元からある `latest` refから現在値を返し、更新直後の読み取りツールにも変更を伝えます。画面に渡す `state` と操作関数は保持します。この読み取り関数は連携時の変更で、スターターには追加していません。
+
+### 変更するファイル
+
+| ファイル | 変更内容 |
+| --- | --- |
+| `package.json`・`src/App.tsx` | SDK・Zodの依存、接続、ツール、会話の表示を追加 |
+| `src/session.css`・`src/SessionControls.tsx`（追加） | 会話用のCSSと追加UI。全文は[追加UIの差分](#session-answer) |
+| `vite.config.ts` | 新しいセッションを作るAPIを追加 |
+| `src/CatalogView.tsx`・`src/style.css` | 完成例側の文言・商品イラストをコーヒー向けに編集 |
+| `src/useCatalog.ts` | 再描画前の現在値をツールから読む `getState()` を追加 |
+| `data/catalog.json` | 汎用の商品A〜Dからコーヒー豆のデータへ変更 |
+| `index.html`・`agents/ec-coffee/prompt.md` | 作品名と、コーヒー豆を提案する指示 |
+
+`src/model.ts`・`src/Dialog.tsx`・`src/layout.css`・`src/main.tsx`・`src/model.test.ts` と `data/schema.json` は同じ内容です。`src/CatalogView.tsx` と `src/style.css` は、完成例側でコーヒー作品の表示に編集しています。
+
+### コーヒーという題材の差分
+
+SDK導入時は自分の `data/catalog.json`・`initialData`・`CatalogView` をそのまま使います。完成例は[コーヒーデータ](../apps/ec-coffee/data/catalog.json)を入れ、コピー先の `CatalogView.tsx` の文言と商品イラスト、`style.css` をコーヒー作品向けに編集しています。両方の呼び出しは `<CatalogView store={catalog} />` です。ツール説明にある産地・味などの例も、自分のデータの属性に合わせられます。
+
+
+<details>
+<summary>EC：package.json の実際のdiff</summary>
+
+```diff
+--- apps/ec/package.json
++++ apps/ec-coffee/package.json
+@@ -1,5 +1,5 @@
+ {
+-  "name": "@hackathon/ec",
++  "name": "@hackathon/ec-coffee",
+   "version": "0.0.0",
+   "private": true,
+   "type": "module",
+@@ -9,7 +9,13 @@
+     "typecheck": "tsc --noEmit"
+   },
+   "dependencies": {
++    "@assistant-ui/react": "0.15.19",
++    "@assistant-ui/react-markdown": "0.14.15",
++    "@subako-ai/assistant-ui": "0.1.1",
++    "@subako-ai/react": "0.1.1",
++    "@subako-ai/sdk": "0.1.1",
+     "react": "19.2.0",
+-    "react-dom": "19.2.0"
++    "react-dom": "19.2.0",
++    "zod": "4.6.4"
+   }
+ }
+```
+
+</details>
+
+
+<details>
+<summary>EC：src/App.tsx の実際のdiff</summary>
+
+```diff
+--- apps/ec/src/App.tsx
++++ apps/ec-coffee/src/App.tsx
+@@ -1,24 +1,191 @@
++import { useMemo, useState } from "react";
++import { z } from "zod";
++import { SubakoClient } from "@subako-ai/sdk";
++import { SubakoChat } from "@subako-ai/assistant-ui";
++import { SubakoProvider, useSession, useTool, useToolClient } from "@subako-ai/react";
+ import { CatalogView } from "./CatalogView";
+-import { useCatalog } from "./useCatalog";
+-import { validateCatalog } from "./model";
++import { useCatalog, type CatalogStore } from "./useCatalog";
++import { cartSummary, searchCatalog, validateCatalog } from "./model";
++import {
++  SessionControls,
++  SafeToolResult,
++  loadSessionId,
++  saveSessionId,
++} from "./SessionControls";
+ import catalogData from "../data/catalog.json";
+ 
+ const initialData = validateCatalog(catalogData);
+ 
++function Assistant({
++  sessionId,
++  catalog,
++  onSessionChange,
++}: {
++  sessionId: string;
++  catalog: CatalogStore;
++  onSessionChange: (sessionId: string) => void;
++}) {
++  const session = useSession(sessionId);
++  const client = useToolClient(session, "shop");
++
++  // 既存の検索関数を、このセッションのツールとして登録する。
++  useTool(client, "search_items", {
++    description:
++      "商品を検索する。queryを空にすると全商品を取得できる。metadataの産地・味・用途も返るため、提案前に使う。maxPriceは1点あたりの上限額。画面は変更しない。",
++    schema: z.object({
++      query: z.string().max(200).trim().default(""),
++      maxPrice: z.number().int().min(0).max(100_000_000).optional(),
++    }).strict(),
++    execute: ({ query, maxPrice }) =>
++      JSON.stringify(searchCatalog(catalog.getState().data.items, query, maxPrice)),
++  });
++
++  useTool(client, "get_item", {
++    description: "1商品の詳細をmetadata込みで取得する。画面には表示されないフレーバーや相性も判断に使える。",
++    schema: z.object({ id: z.string().max(80).trim().min(1) }).strict(),
++    execute: ({ id }) => {
++      const item = catalog.getState().data.items.find((entry) => entry.id === id);
++      if (!item) throw new Error(`商品「${id}」が見つかりません。`);
++      return JSON.stringify(item);
++    },
++  });
++
++  useTool(client, "show_items", {
++    description: "指定した商品だけを画面の一覧に表示する。提案する候補が決まったら使う。idsの順に表示する。空配列なら何も表示しない。",
++    schema: z.object({
++      ids: z.array(z.string().max(80).trim().min(1)).max(100),
++    }).strict(),
++    execute: ({ ids }) => {
++      const shownIds = catalog.showItems(ids);
++      return JSON.stringify({ shownIds });
++    },
++  });
++
++  useTool(client, "show_all_items", {
++    description: "候補の絞り込みを解除して、画面を全商品の表示に戻す。",
++    schema: z.object({}).strict(),
++    execute: () => {
++      catalog.showItems(null);
++      return "全商品を表示しました。";
++    },
++  });
++
++  useTool(client, "compare_items", {
++    description: "最大3点を画面で比較する。商品名・説明・価格を比較パネルに並べる。味などmetadataによる違いは会話で説明する。",
++    schema: z.object({
++      ids: z.array(z.string().max(80).trim().min(1)).max(3),
++    }).strict(),
++    execute: ({ ids }) => {
++      const comparedIds = catalog.compareItems(ids);
++      return JSON.stringify({ comparedIds });
++    },
++  });
++
++  useTool(client, "get_cart", {
++    description: "現在のカートの商品・数量・合計金額と画面の選択状態を読む。人が変更した結果を引き継ぐため、セットを組む前に使う。",
++    schema: z.object({}).strict(),
++    execute: () => {
++      const current = catalog.getState();
++      return JSON.stringify({
++        ...cartSummary(current.cart, current.data.items),
++        comparedIds: current.comparedIds,
++        shownIds: current.shownIds,
++      });
++    },
++  });
++
++  // カートのボタンと同じ操作を呼ぶ。
++  useTool(client, "set_cart_quantity", {
++    description: "1商品のカート内数量を指定値にする。0なら削除。在庫数を超える操作は失敗する。購入確定は行わない。",
++    schema: z.object({
++      id: z.string().max(80).trim().min(1),
++      quantity: z.number().int().min(0).max(9999),
++    }).strict(),
++    execute: ({ id, quantity }) =>
++      JSON.stringify(catalog.setQuantity(id, quantity)),
++  });
++
++  useTool(client, "replace_cart", {
++    description: "カート全体を指定したセットに置き換える。予算がある場合はmaxTotalも渡す。予算・在庫の検証に失敗するとカートは一切変更しない。購入確定は行わない。",
++    schema: z.object({
++      lines: z.array(z.object({
++        itemId: z.string().max(80).trim().min(1),
++        quantity: z.number().int().min(1).max(9999),
++      }).strict()).max(100),
++      maxTotal: z.number().int().min(0).max(100_000_000).optional(),
++    }).strict(),
++    execute: ({ lines, maxTotal }) => JSON.stringify(catalog.replaceCart(lines, maxTotal)),
++  });
++
++  useTool(client, "open_checkout", {
++    description: "購入内容と合計を確認する画面を開く。最終確定は利用者が画面のボタンを押す。実際の課金や配送のないデモ。",
++    schema: z.object({}).strict(),
++    execute: () => JSON.stringify({
++      ...catalog.openCheckout(),
++      status: "awaiting_human_confirmation",
++      message: "購入確認を表示しました。画面の確定ボタンは利用者が押します。実際の決済はありません。",
++    }),
++  });
++
++  return (
++    <SessionControls session={session} onSessionChange={onSessionChange}>
++      <SubakoChat session={session} components={{ tools: { Fallback: SafeToolResult } }} />
++    </SessionControls>
++  );
++}
++
+ export default function App() {
+   const catalog = useCatalog({
+     initialData,
+-    storageKey: "subako-hackathon:ec:v1",
++    storageKey: "subako-hackathon:ec-coffee:v1",
+   });
++  const apiKey = import.meta.env.VITE_SUBAKO_API_KEY?.trim();
++  const baseUrl = import.meta.env.VITE_SUBAKO_BASE_URL || "https://api.us.cloud.subako.ai";
++  const initialId = import.meta.env.VITE_SUBAKO_SESSION_EC_COFFEE?.trim() || "";
++  const storageKey = `hackathon:session:ec-coffee:${baseUrl}:${initialId}`;
++  const [sessionId, setSessionId] = useState(() => loadSessionId(storageKey, initialId));
++  const [connectionError, setConnectionError] = useState("");
++  const subako = useMemo(
++    () => apiKey ? new SubakoClient({ baseUrl, apiKey }) : null,
++    [baseUrl, apiKey],
++  );
++
++  function changeSession(id: string) {
++    saveSessionId(storageKey, id);
++    setConnectionError("");
++    setSessionId(id);
++  }
+ 
+   return (
+-    <div className="app-layout">
++    <div className="app-layout has-session">
+       <div className="app-panel">
+         <div className="app-content">
+           <CatalogView store={catalog} />
+         </div>
+         <div id="app-dialogs" className="app-dialog-host" />
+       </div>
++      <aside className="session-sidebar" aria-label="アシスタント">
++        <header className="session-header">
++          <h2>いっしょに、選ぼう。</h2>
++          <p>好みや予算から、ぴったりの組み合わせを。</p>
++        </header>
++        <div className="session-content">
++          {subako && sessionId ? (
++            <SubakoProvider
++              key={sessionId}
++              client={subako.sessions}
++              onError={() => setConnectionError("接続できません。APIキーとセッションIDを確認してください。")}
++            >
++              {connectionError && <p className="session-error" role="alert">{connectionError}</p>}
++              <Assistant key={sessionId} sessionId={sessionId} catalog={catalog} onSessionChange={changeSession} />
++            </SubakoProvider>
++          ) : (
++            <p className="session-notice">
++              .env.localにAPIキーを設定し、<code>npm run agent:publish -- ec-coffee</code>を実行してください。商品やカートはこのまま操作できます。
++            </p>
++          )}
++        </div>
++      </aside>
+     </div>
+   );
+ }
+```
+
+</details>
+
+
+<details>
+<summary>EC：現在の状態の読み取り — src/useCatalog.ts の実際のdiff</summary>
+
+```diff
+--- apps/ec/src/useCatalog.ts
++++ apps/ec-coffee/src/useCatalog.ts
+@@ -164,6 +164,8 @@
+ 
+   return {
+     state,
++    // 再描画前に呼ばれる処理にも、現在の状態を返します。
++    getState: () => latest.current,
+     storageError,
+     setQuantity,
+     replaceCart,
+```
+
+</details>
+
+<details>
+<summary>EC：vite.config.ts の実際のdiff</summary>
+
+```diff
+--- apps/ec/vite.config.ts
++++ apps/ec-coffee/vite.config.ts
+@@ -1,21 +1,23 @@
+ import { fileURLToPath } from "node:url";
+ import { defineConfig } from "vite";
+ import react from "@vitejs/plugin-react";
++import { newSessionPlugin } from "../../scripts/new-session.ts";
+ 
+ const root = fileURLToPath(new URL("../../", import.meta.url));
+ const codespace = process.env.CODESPACE_NAME;
+ const domain = process.env.GITHUB_CODESPACES_PORT_FORWARDING_DOMAIN;
+-const host = codespace && domain ? `${codespace}-5177.${domain}` : undefined;
++const host = codespace && domain ? `${codespace}-5178.${domain}` : undefined;
+ 
+ export default defineConfig({
+   plugins: [
+     react(),
++      newSessionPlugin({ port: 5178, envDir: root, allowedOrigin: host ? `https://${host}` : undefined }),
+   ],
+   envDir: root,
+-  preview: { port: 5177, strictPort: true },
++  preview: { port: 5178, strictPort: true },
+   server: {
+     host: "0.0.0.0",
+-    port: 5177,
++    port: 5178,
+     strictPort: true,
+     ...(host ? { allowedHosts: [host] } : {}),
+   },
+```
+
+</details>
+
+
+<details>
+<summary>EC：index.html の実際のdiff</summary>
+
+```diff
+--- apps/ec/index.html
++++ apps/ec-coffee/index.html
+@@ -4,7 +4,7 @@
+     <meta charset="UTF-8" />
+     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+     <meta name="theme-color" content="#365341" />
+-    <title>ECアプリ | Subako Hackathon</title>
++    <title>渋谷コーヒー | Subako Hackathon</title>
+   </head>
+   <body>
+     <div id="root"></div>
+```
+
+</details>
+
+
+<details>
+<summary>EC：エージェントの指示のdiff</summary>
+
+```diff
+--- agents/ec/prompt.md
++++ agents/ec-coffee/prompt.md
+@@ -3,5 +3,5 @@
+ metadataには画面に表示しない判断材料があります。属性を判断に使い、必要な理由をわかりやすい自然文で伝えてください。
+ ユーザーが手動で選んだ内容や固定した候補を尊重してください。操作が成功した後で完了を伝えます。
+ 不明な商品、価格、場所、座標、営業時間を作らず、不足条件は質問してください。
+-このカタログの商品を、ユーザーの用途・希望・予算に合わせて提案します。登録された商品属性とmetadataを読み、比較や組み合わせの判断に使ってください。
++コーヒー豆の飲み比べセットを提案します。酸味、焙煎度、産地、フレーバーノート、好み、予算を使って候補を選びます。
+ カートの合計・数量・在庫はアプリの関数の値を使います。決済は行わず、購入の最終確認はユーザーに任せます。
+```
+
+</details>
+
+
+<details>
+<summary>EC：題材の変更 — src/CatalogView.tsx の実際のdiff</summary>
+
+```diff
+--- apps/ec/src/CatalogView.tsx
++++ apps/ec-coffee/src/CatalogView.tsx
+@@ -26,22 +26,22 @@
+ }) {
+   return (
+     <div
+-      className="ec-product-art"
++      className="ec-product-art ec-coffee-art"
+       aria-hidden="true"
+     >
+       <span className="ec-art-number">
+         {String(index + 1).padStart(2, "0")}
+       </span>
+       <div
+-        className="ec-product-placeholder"
++        className="ec-product-bag"
+         style={{ borderBottomColor: colors[index % colors.length] }}
+       >
+-        <span className="ec-placeholder-brand">SELECT</span>
+-        <span className="ec-placeholder-mark">◇</span>
+-        <span className="ec-placeholder-unit">{item.unit}</span>
++        <span className="ec-bag-brand">SHIBUYA</span>
++        <span className="ec-bag-mark">◒</span>
++        <span className="ec-bag-unit">{item.unit}</span>
+       </div>
+       <span className="ec-art-caption">
+-        YOUR COLLECTION
++        COFFEE COLLECTION
+       </span>
+     </div>
+   );
+@@ -78,7 +78,7 @@
+         <a className="ec-brand" href="/" aria-label="ショップのホーム">
+           <span className="ec-brand-symbol">s.</span>
+           <span>
+-            SELECT MARKET
++            SHIBUYA COFFEE
+             <small>SUBAKO HACKATHON</small>
+           </span>
+         </a>
+@@ -104,16 +104,16 @@
+         <section className="ec-intro">
+           <div>
+             <p className="ec-eyebrow">
+-              MAKE IT YOUR OWN.
++              A LITTLE DISCOVERY, EVERY CUP.
+             </p>
+             <h1>{state.data.title}</h1>
+             <p className="ec-description">{state.data.description}</p>
+           </div>
+           <div className="ec-intro-note">
+-            <span>あなたがつくる</span>
+-            <strong>新しい買い物体験</strong>
++            <span>渋谷をイメージした</span>
++            <strong>小さなコーヒー便</strong>
+             <span>
+-              気になる商品を、自由に組み合わせよう。
++              100gから、好みをひとつずつ。
+             </span>
+           </div>
+         </section>
+@@ -130,7 +130,7 @@
+         )}
+         <p role="status" className="ec-notice">
+           {state.notice ||
+-            "変更はこのブラウザーに保存されます。"}
++            "商品・価格・在庫はハッカソン用の架空データです。実際の店舗の商品ではありません。"}
+         </p>
+ 
+         <div className="ec-layout">
+@@ -397,7 +397,7 @@
+         <footer className="ec-footer">
+           <span>SUBAKO HACKATHON · 2026.09.14</span>
+           <span>
+-            YOUR IDEA, YOUR COLLECTION
++            渋谷の街をイメージした架空の商品・デモ価格
+           </span>
+         </footer>
+       </main>
+```
+
+</details>
+
+<details>
+<summary>EC：題材の変更 — src/style.css の実際のdiff</summary>
+
+```diff
+--- apps/ec/src/style.css
++++ apps/ec-coffee/src/style.css
+@@ -286,6 +286,9 @@
+   background: #e9ede4;
+   overflow: hidden;
+ }
++.ec-coffee-art {
++  background: #efeee7;
++}
+ .ec-product:nth-child(3n + 2) .ec-product-art {
+   background: #e9ede6;
+ }
+@@ -300,30 +303,50 @@
+   font-size: 9px;
+   letter-spacing: 0.05em;
+ }
+-.ec-product-placeholder {
+-  width: 100px;
+-  height: 100px;
++.ec-product-bag {
++  position: relative;
++  width: 79px;
++  height: 119px;
+   background: #faf9f2;
+   border: 1px solid #e4e2d6;
+-  border-bottom: 4px solid;
+-  border-radius: 12px;
++  border-bottom: 18px solid;
++  border-radius: 2px 2px 4px 4px;
++  transform: rotate(-5deg);
++  box-shadow:
++    9px 10px 14px #40412d14,
++    inset 3px 0 3px #fff;
+   display: flex;
+   flex-direction: column;
+   align-items: center;
+   justify-content: center;
+ }
+-.ec-placeholder-brand {
++.ec-product-bag::before {
++  content: "";
++  position: absolute;
++  inset: 6px 0 auto;
++  border-top: 2px solid #e9e7dd;
++}
++.ec-product-bag::after {
++  content: "";
++  position: absolute;
++  inset: auto 6px -13px;
++  border-top: 1px solid #ffffff50;
++}
++.ec-product:nth-child(2n) .ec-product-bag {
++  transform: rotate(4deg);
++}
++.ec-bag-brand {
+   font-size: 7px;
+   letter-spacing: 0.15em;
+   font-family: Georgia, serif;
+ }
+-.ec-placeholder-mark {
++.ec-bag-mark {
+   display: block;
+   font-size: 30px;
+   color: #687360;
+   line-height: 1.6;
+ }
+-.ec-placeholder-unit {
++.ec-bag-unit {
+   font-size: 7px;
+   letter-spacing: 0.04em;
+   color: #8b8e7f;
+@@ -807,9 +830,11 @@
+   .ec-product-art {
+     height: 155px;
+   }
+-  .ec-product-placeholder {
+-    width: 90px;
+-    height: 90px;
++  .ec-product-bag {
++    transform: scale(0.9) rotate(-5deg);
++  }
++  .ec-product:nth-child(2n) .ec-product-bag {
++    transform: scale(0.9) rotate(4deg);
+   }
+   .ec-product-name {
+     font-size: 12px;
+```
+
+</details>
+
+`catalog.json` の商品データ全文は[スターター](../apps/ec/data/catalog.json)と[完成例](../apps/ec-coffee/data/catalog.json)で比較できます。SDKのためにschemaを変える必要はありません。
+
+- [ ] 自分の商品を読み、条件に合う候補が一覧に表示された。
+- [ ] 手でカートを変更した後、AIが現在の数量・合計を読み取れた。
+- [ ] AIが購入確認を開いても、最終確定は画面から行えた。
+
+<a id="map-answer"></a>
+
+## Map：既存の候補選択・訪問順・固定をAIから使う
+
+**解答の中心は、`useMapApp` が返す `app` を会話コンポーネントへ渡すことです。** 画面のボタンとAIのツールが、同じ訪問リストを更新します。
+
+| ツール | `execute` が使う値・関数 | アプリでの役割 |
+| --- | --- | --- |
+| `get_places` | `app.getState().items` | 登録地点とmetadataを読む。キーワードがあれば絞り込む |
+| `get_map_state` | `app.getState()` と `getVisitSummary(...)` | 現在の候補・訪問順・固定・距離・時間を読む |
+| `show_candidates` | `app.showCandidates(ids)` | 候補を地図と一覧で強調 |
+| `set_visit_order` | `app.setVisitOrder(ids)` | 訪問順を更新。固定された地点を残す |
+| `set_pinned` | `app.setPinned(id, pinned)` | 地点の固定を変更 |
+
+最初は `get_places` と `show_candidates` の2つで、登録地点を読んで地図に候補を出せます。検索は今の `app.getState().items` を読み、画面の更新には既存の関数を呼びます。
+
+完成例の `useMapApp` には `getState()` を追加しています。操作ごとに更新される既存の `current` refを読み、再描画を待たずに呼ばれるツールにも現在値を返します。画面は引き続き `state` を使います。スターターにはこの読み取り関数を先回りして用意せず、連携時の変更として示しています。
+
+### 変更するファイル
+
+| ファイル | 変更内容 |
+| --- | --- |
+| `package.json`・`src/App.tsx` | SDK・Zodの依存、接続、ツール、会話の表示を追加 |
+| `src/session.css`・`src/SessionControls.tsx`（追加） | 会話用のCSSと追加UI。全文は[追加UIの差分](#session-answer) |
+| `vite.config.ts` | 新しいセッションを作るAPIを追加 |
+| `src/domain.ts`・`src/use-map-app.ts`・`src/map-canvas.tsx`・`src/map-view.tsx`・`src/domain.test.ts` | 完成例側に保存済み徒歩経路の計算・描画・表示とテストを追加 |
+| `src/use-map-app.ts` | 再描画前の現在値をツールから読む `getState()` も追加 |
+| `src/data.json`（変更）・`src/routes.json`（追加） | 架空の地点を渋谷周辺の店舗に置き換え、保存済みの徒歩経路を追加 |
+| `index.html`・`agents/map-coffee/prompt.md` | 作品名と、コーヒー屋巡りを提案する指示 |
+
+`src/Dialog.tsx`・`src/style.css`・`src/layout.css`・`src/main.tsx`・`src/use-map-app.test.ts` は同じ内容です。下記のアプリ機能の差分は、保存済み徒歩経路の計算・描画・表示・テストです。`use-map-app.ts` には連携用の `getState()` 追加も含まれます。スターターは経路データを扱わず、直線距離から概算します。
+
+### コーヒーという題材の差分
+
+完成例は、`src/data.json` の架空の地点を[店舗データ](../apps/map-coffee/src/data.json)で置き換え、[徒歩経路](../apps/map-coffee/src/routes.json)を `useMapApp` に渡しています。`MapView` のタイトルと説明も変わります。自分の地点データにSDKを追加する際は、この入れ替えは不要です。
+
+完成例の `mapResult` は、徒歩経路に対応させた `getVisitSummary` で所要時間を求め、ツールの結果から経路の全座標を省く関数です。データを判断しやすい形でAIへ返すために、連携側へ追加しています。`get_places` と `show_candidates` の2つだけなら、この関数や `routes.json` は使いません。スターターで訪問順も更新する場合は、ツールの結果を `JSON.stringify(app.setVisitOrder(ids))` で返せます。概算を読みたい場合は `app.getVisitSummary()` が使えます。
+
+Mapの既定の出発地は画面にも表示している渋谷駅です。座標は [`domain.ts`](../apps/map/src/domain.ts) の `SHIBUYA_STATION` にあります。初期JSONに別地域の地点を用意しても、出発地は自動では変わりません。別の出発地で使う場合はこの定数と表示名を自分のアプリに合わせて変更します。
+
+
+<details>
+<summary>Map：package.json の実際のdiff</summary>
+
+```diff
+--- apps/map/package.json
++++ apps/map-coffee/package.json
+@@ -1,5 +1,5 @@
+ {
+-  "name": "@hackathon/map",
++  "name": "@hackathon/map-coffee",
+   "version": "0.0.0",
+   "private": true,
+   "type": "module",
+@@ -10,10 +10,16 @@
+     "test": "tsx --test src/*.test.ts"
+   },
+   "dependencies": {
++    "@assistant-ui/react": "0.15.19",
++    "@assistant-ui/react-markdown": "0.14.15",
++    "@subako-ai/assistant-ui": "0.1.1",
++    "@subako-ai/react": "0.1.1",
++    "@subako-ai/sdk": "0.1.1",
++    "leaflet": "1.9.4",
+     "react": "19.2.0",
+     "react-dom": "19.2.0",
+-    "leaflet": "1.9.4",
+-    "react-leaflet": "5.0.0"
++    "react-leaflet": "5.0.0",
++    "zod": "4.6.4"
+   },
+   "devDependencies": {
+     "@types/leaflet": "^1.9.20"
+```
+
+</details>
+
+
+<details>
+<summary>Map：src/App.tsx の実際のdiff</summary>
+
+```diff
+--- apps/map/src/App.tsx
++++ apps/map-coffee/src/App.tsx
+@@ -1,25 +1,133 @@
++import { useMemo, useState } from "react";
++import { z } from "zod";
++import { SubakoClient } from "@subako-ai/sdk";
++import { SubakoProvider, useSession, useTool, useToolClient } from "@subako-ai/react";
++import { SubakoChat } from "@subako-ai/assistant-ui";
+ import { MapView } from "./map-view";
+-import { useMapApp } from "./use-map-app";
+-import { parseMapItems } from "./domain";
++import { useMapApp, type MapApp } from "./use-map-app";
++import { getVisitSummary, parseMapItems, type MapState, type WalkingRoute } from "./domain";
++import { SessionControls, loadSessionId, saveSessionId, SafeToolResult } from "./SessionControls";
+ import data from "./data.json";
++import routeData from "./routes.json";
+ 
+ const initialItems = parseMapItems(data);
++const walkingRoutes = routeData as WalkingRoute[];
++
++// 経路の全座標は省き、判断に必要な距離と所要時間を渡します。
++function mapResult(state: MapState) {
++  const summary = getVisitSummary(state.items, state.visitIds, walkingRoutes);
++  return JSON.stringify({
++    ...state,
++    summary: {
++      ...summary,
++      segments: summary.segments.map(({ coordinates: _, ...segment }) => segment),
++    },
++  });
++}
++
++function MapAssistant({ app, sessionId, onSessionChange }: {
++  app: MapApp;
++  sessionId: string;
++  onSessionChange: (id: string) => void;
++}) {
++  const session = useSession(sessionId);
++  const client = useToolClient(session, "coffee-map");
++
++  // 既存の画面操作を、ここでエージェントのツールとして登録します。
++  useTool(client, "get_places", {
++    description: "地点を取得する。metadataには画面に出していない特徴や情報の出典が含まれる。まず全件取得し、ユーザーの好みと比較する。",
++    schema: z.object({
++      query: z.string().default("").describe("任意のキーワード。省略で全件。"),
++    }).strict(),
++    execute: ({ query }) => {
++      const normalized = query.trim().toLocaleLowerCase();
++      return JSON.stringify(app.getState().items.filter((item) =>
++        !normalized || JSON.stringify(item).toLocaleLowerCase().includes(normalized),
++      ));
++    },
++  });
++  useTool(client, "get_map_state", {
++    description: "候補・訪問順・固定した地点と、渋谷駅からの距離・移動時間の概算を取得する。概算に店内滞在と帰路は含まれない。",
++    schema: z.object({}).strict(),
++    execute: () => mapResult(app.getState()),
++  });
++  useTool(client, "show_candidates", {
++    description: "提案する地点を地図と一覧で強調する。空配列で強調を解除する。",
++    schema: z.object({
++      ids: z.array(z.string()).describe("地点のidを順番に指定"),
++    }).strict(),
++    execute: ({ ids }) => JSON.stringify({ candidateIds: app.showCandidates(ids) }),
++  });
++  useTool(client, "set_visit_order", {
++    description: "訪問したい地点のidを訪問順で指定し、画面を更新する。固定された地点を除外できない。実線は保存済みの徒歩経路、点線は経路未取得の訪問順。結果の移動時間に店内滞在・帰路は含まれない。",
++    schema: z.object({
++      ids: z.array(z.string()).describe("地点のidを順番に指定"),
++    }).strict(),
++    execute: ({ ids }) => mapResult(app.setVisitOrder(ids)),
++  });
++  useTool(client, "set_pinned", {
++    description: "ユーザーの明示的な依頼で地点を固定または解除する。固定した地点は再提案でも残る。",
++    schema: z.object({ id: z.string(), pinned: z.boolean() }).strict(),
++    execute: ({ id, pinned }) =>
++      JSON.stringify({ pinnedIds: app.setPinned(id, pinned) }),
++  });
++
++  return (
++    <SessionControls session={session} onSessionChange={onSessionChange}>
++      <SubakoChat session={session} components={{ tools: { Fallback: SafeToolResult } }} />
++    </SessionControls>
++  );
++}
+ 
+ export default function App() {
+-  const app = useMapApp(initialItems, "hackathon-map-v1");
++  const app = useMapApp(initialItems, "hackathon-map-coffee-v1", walkingRoutes);
++  const apiKey = import.meta.env.VITE_SUBAKO_API_KEY?.trim();
++  const baseUrl = import.meta.env.VITE_SUBAKO_BASE_URL?.trim() || "https://api.us.cloud.subako.ai";
++  const initialId = import.meta.env.VITE_SUBAKO_SESSION_MAP_COFFEE?.trim() || "";
++  const storageKey = `hackathon:session:map-coffee:${baseUrl}:${initialId}`;
++  const [sessionId, setSessionId] = useState(() => loadSessionId(storageKey, initialId));
++  const [connectionError, setConnectionError] = useState("");
++  const subako = useMemo(() => apiKey ? new SubakoClient({ baseUrl, apiKey }) : null, [baseUrl, apiKey]);
++
++  function changeSession(id: string) {
++    saveSessionId(storageKey, id);
++    setConnectionError("");
++    setSessionId(id);
++  }
+ 
+   return (
+-    <div className="app-layout">
++    <div className="app-layout has-session">
+       <div className="app-panel">
+         <div className="app-content">
+           <MapView
+             app={app}
+-            title="あなたの寄り道マップ。"
+-            subtitle="好きな場所を集めて、自分だけの訪問プランを。"
++            title="渋谷、コーヒーの寄り道。"
++            subtitle="一杯の好奇心を連れて。あなた好みのコーヒー散歩を。"
+           />
+         </div>
+         <div id="app-dialogs" className="app-dialog-host" />
+       </div>
++      <aside className="session-sidebar" aria-label="寄り道の相談室">
++        <header>
++          <h2>寄り道の相談室</h2>
++          <p>好みや空き時間から、一緒に考えます。</p>
++        </header>
++        <div className="session-content">
++          {connectionError && (
++            <div className="session-notice session-error" role="alert">
++              {connectionError}
++              <button onClick={() => setConnectionError("")}>閉じる</button>
++            </div>
++          )}
++          {subako && sessionId ? (
++            <SubakoProvider client={subako.sessions} onError={() => setConnectionError("接続を確認してください。キー・session ID・Originの設定を確認し、アプリを再起動してください。") }>
++              <MapAssistant key={sessionId} app={app} sessionId={sessionId} onSessionChange={changeSession} />
++            </SubakoProvider>
++          ) : (
++            <p className="session-notice">AIを使うには .env.local にAPIキーを設定し、<code>npm run agent:publish -- map-coffee</code> を実行してアプリを再起動してください。</p>
++          )}
++        </div>
++      </aside>
+     </div>
+   );
+ }
+```
+
+</details>
+
+
+<details>
+<summary>Map：vite.config.ts の実際のdiff</summary>
+
+```diff
+--- apps/map/vite.config.ts
++++ apps/map-coffee/vite.config.ts
+@@ -1,18 +1,23 @@
+ import { fileURLToPath } from "node:url";
+ import { defineConfig } from "vite";
+ import react from "@vitejs/plugin-react";
++import { newSessionPlugin } from "../../scripts/new-session.ts";
+ 
++const envDir = fileURLToPath(new URL("../../", import.meta.url));
+ const codespace = process.env.CODESPACE_NAME;
+ const domain = process.env.GITHUB_CODESPACES_PORT_FORWARDING_DOMAIN;
+-const host = codespace && domain ? `${codespace}-5175.${domain}` : undefined;
++const host = codespace && domain ? `${codespace}-5176.${domain}` : undefined;
+ 
+ export default defineConfig({
+-  plugins: [react()],
+-  envDir: fileURLToPath(new URL("../../", import.meta.url)),
+-  preview: { port: 5175, strictPort: true },
++  plugins: [
++    react(),
++    newSessionPlugin({ port: 5176, envDir, allowedOrigin: host ? `https://${host}` : undefined }),
++  ],
++  envDir,
++  preview: { port: 5176, strictPort: true },
+   server: {
+     host: "0.0.0.0",
+-    port: 5175,
++    port: 5176,
+     strictPort: true,
+     ...(host ? { allowedHosts: [host] } : {}),
+   },
+```
+
+</details>
+
+
+<details>
+<summary>Map：index.html の実際のdiff</summary>
+
+```diff
+--- apps/map/index.html
++++ apps/map-coffee/index.html
+@@ -4,7 +4,7 @@
+     <meta charset="UTF-8" />
+     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+     <meta name="theme-color" content="#2e563f" />
+-    <title>あなたの寄り道マップ | Subako Hackathon</title>
++    <title>渋谷、コーヒーの寄り道。| Subako Hackathon</title>
+   </head>
+   <body>
+     <div id="root"></div>
+```
+
+</details>
+
+
+<details>
+<summary>Map：エージェントの指示のdiff</summary>
+
+```diff
+--- agents/map/prompt.md
++++ agents/map-coffee/prompt.md
+@@ -3,5 +3,5 @@
+ metadataには画面に表示しない判断材料があります。属性を判断に使い、必要な理由をわかりやすい自然文で伝えてください。
+ ユーザーが手動で選んだ内容や固定した候補を尊重してください。操作が成功した後で完了を伝えます。
+ 不明な商品、価格、場所、座標、営業時間を作らず、不足条件は質問してください。
+-登録された地点の訪問計画を助けます。地点の特徴、移動時間と滞在時間を比べ、候補と訪問順を画面に示してください。
+-ユーザーの時間や希望に収まる候補を探し、固定した地点は残して組み直してください。移動の目安と実際の徒歩経路を区別します。
++コーヒー屋巡りの相談を助けます。店の特徴、歩く時間と滞在時間を比べ、候補と訪問順を画面に示してください。
++ユーザーの時間や希望に収まる候補を探し、固定した店は残して組み直してください。移動の目安と実際の徒歩経路を区別します。
+```
+
+</details>
+
+
+<details>
+<summary>Map：徒歩経路機能の追加 — src/domain.ts の実際のdiff</summary>
+
+```diff
+--- apps/map/src/domain.ts
++++ apps/map-coffee/src/domain.ts
+@@ -27,6 +27,18 @@
+ }
+ 
+ export const SHIBUYA_STATION = { lat: 35.658034, lng: 139.701636 };
++
++export interface WalkingRoute {
++  fromId: string;
++  toId: string;
++  from: MapItem["position"];
++  to: MapItem["position"];
++  seconds: number;
++  distanceMeters: number;
++  coordinates: [number, number][];
++  sourceUrl: string;
++  checkedAt: string;
++}
+ 
+ function record(value: unknown, label: string): Record<string, unknown> {
+   if (!value || typeof value !== "object" || Array.isArray(value))
+@@ -154,6 +166,7 @@
+ export function getVisitSummary(
+   items: MapItem[],
+   ids: string[],
++  routes: WalkingRoute[] = [],
+ ) {
+   const locations = ids.flatMap(
+     (id) => items.find((item) => item.id === id) ?? [],
+@@ -162,18 +175,35 @@
+     const previous = locations[index - 1];
+     const from = previous?.position ?? SHIBUYA_STATION;
+     const straightLineKm = distanceKm(from, item.position);
++    // 同じidでも座標が変わったら、保存済み経路を使いません。
++    const same = (a: MapItem["position"], b: MapItem["position"]) =>
++      Math.abs(a.lat - b.lat) < 1e-7 && Math.abs(a.lng - b.lng) < 1e-7;
++    const route = routes.find(
++      (route) =>
++        route.fromId === (previous?.id ?? "shibuya-station") &&
++        route.toId === item.id &&
++        same(route.from, from) &&
++        same(route.to, item.position),
++    );
+     return {
+       from: previous?.name ?? "渋谷駅",
+       to: item.name,
+-      distanceKm: straightLineKm,
++      straightLineKm: Math.round(straightLineKm * 100) / 100,
++      distanceKm: route ? route.distanceMeters / 1000 : straightLineKm,
+       estimatedWalkMinutes: Math.max(
+         1,
+-        Math.ceil(((straightLineKm * 1.3) / 4.8) * 60),
++        Math.ceil(
++          route ? route.seconds / 60 : ((straightLineKm * 1.3) / 4.8) * 60,
++        ),
+       ),
+-      coordinates: [
++      isWalkingRoute: Boolean(route),
++      coordinates: route?.coordinates ?? [
+         [from.lng, from.lat],
+         [item.position.lng, item.position.lat],
+       ],
++      routeSource: route
++        ? { url: route.sourceUrl, checkedAt: route.checkedAt }
++        : null,
+     };
+   });
+   return {
+@@ -182,6 +212,9 @@
+       (sum, item) => sum + item.estimatedWalkMinutes,
+       0,
+     ),
+-    note: "点線は訪問順で、徒歩経路ではありません。直線距離×1.3・時速4.8kmで概算しています。滞在時間と帰路は含みません。",
++    note:
++      segments.length && segments.every((segment) => segment.isWalkingRoute)
++        ? "事前取得したOSMの徒歩経路・所要時間の推定です。混雑・工事・出入口の現況を保証しません。店内の滞在時間と帰路は含みません。"
++        : "点線の区間は徒歩経路が未取得。直線距離×1.3・時速4.8kmで概算しています。店内の滞在時間と帰路は含みません。",
+   };
+ }
+```
+
+</details>
+
+<details>
+<summary>Map：現在値の読み取りと徒歩経路 — src/use-map-app.ts の実際のdiff</summary>
+
+```diff
+--- apps/map/src/use-map-app.ts
++++ apps/map-coffee/src/use-map-app.ts
+@@ -6,6 +6,7 @@
+   updateVisitOrder,
+   type MapItem,
+   type MapState,
++  type WalkingRoute,
+ } from "./domain";
+ 
+ const initialState = (items: MapItem[]): MapState => ({
+@@ -19,6 +20,7 @@
+ export function useMapApp(
+   initialItems: MapItem[],
+   storageKey: string,
++  routes: WalkingRoute[] = [],
+ ) {
+   const [loaded] = useState(() => {
+     try {
+@@ -65,10 +67,15 @@
+     state,
+     notice,
+     setNotice,
++    getState() {
++      // 再描画前に続けて呼ばれても、最新の変更を返します。
++      return current.current;
++    },
+     getVisitSummary() {
+       return getVisitSummary(
+         current.current.items,
+         current.current.visitIds,
++        routes,
+       );
+     },
+     showCandidates(ids: unknown) {
+```
+
+</details>
+
+<details>
+<summary>Map：徒歩経路機能の追加 — src/map-canvas.tsx の実際のdiff</summary>
+
+```diff
+--- apps/map/src/map-canvas.tsx
++++ apps/map-coffee/src/map-canvas.tsx
+@@ -198,7 +198,7 @@
+               pathOptions={{
+                 color: "#416753",
+                 weight: 4,
+-                dashArray: "7 9",
++                dashArray: segment.isWalkingRoute ? undefined : "7 9",
+               }}
+             />
+           ))}
+@@ -212,7 +212,9 @@
+       {visitItems.length > 0 && (
+         <div className="map-legend">
+           <span />{" "}
+-          点線は訪問順です。徒歩経路ではありません。
++          {offline
++            ? "点線は訪問順です。徒歩経路ではありません。"
++            : "実線：保存済みの徒歩経路 / 点線：訪問順（経路未取得）"}
+         </div>
+       )}
+     </section>
+```
+
+</details>
+
+<details>
+<summary>Map：徒歩経路機能の追加 — src/map-view.tsx の実際のdiff</summary>
+
+```diff
+--- apps/map/src/map-view.tsx
++++ apps/map-coffee/src/map-view.tsx
+@@ -189,7 +189,10 @@
+                           {item.name}
+                         </button>
+                         <small>
+-                          前の地点から直線{" "}
++                          前の地点から
++                          {summary.segments[index]?.isWalkingRoute
++                            ? "徒歩"
++                            : "直線"}{" "}
+                           {summary.segments[index]?.distanceKm.toFixed(2)}{" "}
+                           km・移動 約
+                           {summary.segments[index]?.estimatedWalkMinutes}分
+@@ -279,7 +282,7 @@
+               target="_blank"
+               rel="noreferrer"
+             >
+-              地図：© OpenStreetMap contributors / ODbL
++              地図・徒歩経路：© OpenStreetMap contributors / ODbL
+             </a>{" "}
+             ·{" "}
+             <a
+```
+
+</details>
+
+<details>
+<summary>Map：徒歩経路機能の追加 — src/domain.test.ts の実際のdiff</summary>
+
+```diff
+--- apps/map/src/domain.test.ts
++++ apps/map-coffee/src/domain.test.ts
+@@ -14,7 +14,7 @@
+   name: "最初の地点",
+   position: { lat: 35.658034, lng: 139.701636 },
+   tags: [],
+-  metadata: { preferences: { priority: 2, notes: ["短時間"] } },
++  metadata: { preferences: { acidity: 2, notes: ["nuts"] } },
+ };
+ 
+ test("metadataを保持し、配列とitems形式の両方を読める", () => {
+@@ -70,6 +70,34 @@
+   );
+   const result = getVisitSummary(parseMapItems([row]), ["first"]);
+   assert.equal(result.segments[0]?.from, "渋谷駅");
+-  assert.match(result.note, /徒歩経路ではありません/);
++  assert.match(result.note, /徒歩経路が未取得/);
+   assert.equal(getVisitSummary([], []).estimatedWalkMinutes, 0);
+ });
++
++test("取得済み徒歩経路を使い、同じidの座標が変わったら概算に戻す", () => {
++  const items = parseMapItems([row]);
++  const route = {
++    fromId: "shibuya-station",
++    toId: "first",
++    from: row.position,
++    to: row.position,
++    seconds: 600,
++    distanceMeters: 700,
++    coordinates: [[139.701636, 35.658034]] as [number, number][],
++    sourceUrl: "https://example.com",
++    checkedAt: "2026-09-13",
++  };
++  assert.equal(
++    getVisitSummary(items, ["first"], [route]).estimatedWalkMinutes,
++    10,
++  );
++  assert.equal(
++    getVisitSummary(items, ["first"], [route]).segments[0]?.isWalkingRoute,
++    true,
++  );
++  const moved = [{ ...items[0]!, position: { lat: 35.66, lng: 139.7 } }];
++  assert.equal(
++    getVisitSummary(moved, ["first"], [route]).segments[0]?.isWalkingRoute,
++    false,
++  );
++});
+```
+
+</details>
+
+店舗と経路のJSON全文は上記のファイルを参照してください。徒歩経路の座標列は長いため、この資料ではコードの差分に集中しています。
+
+- [ ] AIの提案した地点が、手で選択したときと同じ地図・一覧に反映された。
+- [ ] 手で地点を固定し、AIに訪問順を組み直してもらっても残った。
+- [ ] AIが距離・時間の値をアプリから読み、移動時間と店内滞在を区別して説明できた。
+
+<a id="session-answer"></a>
+
+## 追加UI：会話のサイドバーと新しいセッション
+
+3つの完成例の `SessionControls.tsx` と `session.css` は同じ内容です。ファイルは各アプリにコピーしてあります。以下にはTODO版を代表として載せます。
+
+| 追加部分 | 役割 | 最小の連携での扱い |
+| --- | --- | --- |
+| `session.css` | アプリと会話の表示領域を分ける | サイドバーを使うならコピーしてimportする |
+| `SessionControls` | 新しいセッションを作り、会話を切り替える | 後から追加できる |
+| `loadSessionId`・`saveSessionId` | 同じタブで選んだ会話を再開する | 会話切り替えと一緒に追加する |
+| `SafeToolResult` | 短い操作表示・失敗状態・SDKの承認ボタンを表示 | 必要に応じて `SubakoChat` の `components` に渡す |
+| `newSessionPlugin` | Viteにセッション作成APIを追加する | 新しいセッションのボタンを使うときに追加する |
+
+`SessionControls` をコピーしたら、`App` に会話選択のstateを追加し、会話コンポーネントへ `sessionId`・`onSessionChange` を渡します。`key={sessionId}` により、切り替え時は会話の接続とツール登録を作り直します。TODOやカートなど、元のアプリのstateは親に残ります。接続部分まで含めたdiffは各題材の `App.tsx` にあります。
+
+
+<details>
+<summary>追加ファイル：src/SessionControls.tsx の全文</summary>
+
+```diff
+--- /dev/null
++++ apps/todo-integrated/src/SessionControls.tsx
+@@ -0,0 +1,97 @@
++import { useRef, useState, type ReactNode } from "react";
++import type { SessionConnection } from "@subako-ai/sdk";
++import type { ToolCallMessagePartProps } from "@assistant-ui/react";
++import { SubakoToolApproval } from "@subako-ai/assistant-ui";
++import { useSessionState } from "@subako-ai/react";
++import "./session.css";
++
++export function loadSessionId(key: string, initialId: string) {
++  try {
++    return sessionStorage.getItem(key) || initialId;
++  } catch {
++    return initialId;
++  }
++}
++
++export function saveSessionId(key: string, id: string) {
++  try {
++    sessionStorage.setItem(key, id);
++  } catch {
++    // 保存できなくても、開いている間は会話を続けられます。
++  }
++}
++
++export function SessionControls({ session, onSessionChange, children }: {
++  session: SessionConnection | null;
++  onSessionChange: (id: string) => void;
++  children: ReactNode;
++}) {
++  const state = useSessionState(session);
++  const [creating, setCreating] = useState(false);
++  const [error, setError] = useState("");
++  const inFlight = useRef(false);
++  const running = state?.isRunning && state.status !== "failed";
++  const connecting = !state || state.status === "connecting" || state.status === "reconnecting";
++
++  async function startNewSession() {
++    if (inFlight.current) return;
++    inFlight.current = true;
++    setCreating(true);
++    setError("");
++    try {
++      // 作成APIはCORS制約があるため、Viteを経由します。
++      const response = await fetch("/__hackathon/session", {
++        method: "POST",
++        headers: { "X-Hackathon-Session": "new" },
++        signal: AbortSignal.timeout(30_000),
++      });
++      const result = await response.json();
++      if (!response.ok || typeof result?.sessionId !== "string" || !result.sessionId) {
++        throw new Error("create failed");
++      }
++      onSessionChange(result.sessionId);
++    } catch {
++      setError("新しいセッションを作れませんでした。Viteの起動とAPIキーの設定・権限を確認して、もう一度お試しください。");
++    } finally {
++      inFlight.current = false;
++      setCreating(false);
++    }
++  }
++
++  return (
++    <div className="session-conversation" aria-busy={creating}>
++      <div className="session-toolbar">
++        <button
++          type="button"
++          disabled={creating || running || connecting}
++          onClick={() => void startNewSession()}
++          title="会話を新しくします。アプリ内のデータは引き継がれます。"
++        >
++          <span aria-hidden="true">＋</span>
++          {creating ? "作成中…" : "新しいセッション"}
++        </button>
++        {running && <span>応答後、または停止後に切り替えられます。</span>}
++        {error && <p className="session-error" role="alert">{error}</p>}
++      </div>
++      <div className="session-chat" inert={creating}>{children}</div>
++    </div>
++  );
++}
++
++// 補足データは省略し、操作の状態と承認ボタンを表示します。
++export function SafeToolResult(props: ToolCallMessagePartProps) {
++  const { result, isError, approval } = props;
++  const waiting = approval && approval.approved === undefined && approval.resolution === undefined;
++  let message = result === undefined ? "アプリを操作しています…" : "アプリの操作結果を受け取りました";
++  if (isError) message = "アプリの操作に失敗しました";
++  if (waiting) message = "操作の承認を待っています";
++  if (approval?.approved === false) message = "操作を許可しませんでした";
++  if (approval?.resolution) message = "操作の承認待ちは終了しました";
++
++  return (
++    <div className="tool-status">
++      <span className={isError ? "session-error" : undefined}>{message}</span>
++      <SubakoToolApproval {...props} />
++    </div>
++  );
++}
+```
+
+</details>
+
+
+<details>
+<summary>追加ファイル：src/session.css の全文</summary>
+
+```diff
+--- /dev/null
++++ apps/todo-integrated/src/session.css
+@@ -0,0 +1,81 @@
++.app-layout.has-session { grid-template-columns: minmax(0, 1fr) 360px; }
++.session-sidebar {
++  min-width: 0;
++  min-height: 0;
++  display: flex;
++  flex-direction: column;
++  background: #fffefa;
++  color: #283b31;
++  border-left: 1px solid #d9dfd7;
++  font-family: system-ui, sans-serif;
++}
++.session-sidebar > header {
++  flex-shrink: 0;
++  padding: 22px 22px 18px;
++  border-bottom: 1px solid #e5e8df;
++}
++.session-sidebar > header > span { font-size: 9px; letter-spacing: 1.8px; color: #7e8a76; }
++.session-sidebar h2 { margin: 10px 0 6px; font-size: 16px; line-height: 1.5; font-weight: 600; }
++.session-sidebar > header p { margin: 0; font-size: 11px; line-height: 1.8; color: #7b8374; }
++.session-content, .session-conversation, .session-chat {
++  flex: 1;
++  min-height: 0;
++  display: flex;
++  flex-direction: column;
++}
++.session-content { overflow: auto; overscroll-behavior: contain; }
++.session-content > p { margin: 22px; font-size: 13px; line-height: 1.9; }
++.session-notice { padding: 12px 16px; font: 12px/1.7 system-ui, sans-serif; }
++.session-error { margin: 0; color: #a14032; overflow-wrap: anywhere; }
++.session-toolbar {
++  flex-shrink: 0;
++  display: flex;
++  flex-direction: column;
++  align-items: flex-end;
++  gap: 6px;
++  padding: 10px 16px;
++  border-bottom: 1px solid #e1e5da;
++  font: 12px/1.6 system-ui, sans-serif;
++}
++.session-toolbar button {
++  display: inline-flex;
++  align-items: center;
++  gap: 5px;
++  padding: 6px 10px;
++  border: 1px solid #cbd5c6;
++  border-radius: 6px;
++  background: #fffefa;
++  color: #345b46;
++  font: inherit;
++  cursor: pointer;
++}
++.session-toolbar button:hover:not(:disabled) { background: #f0f3eb; }
++.session-toolbar button:focus-visible { outline: 2px solid #345b46; outline-offset: 3px; }
++.session-toolbar button:disabled { opacity: 0.55; cursor: default; }
++.session-toolbar > span { color: #788173; font-size: 11px; }
++.tool-status { display: block; padding: 4px 0; font: 12px/1.6 system-ui, sans-serif; color: #676155; }
++.session-sidebar .subako-chat {
++  flex: 1;
++  min-height: 0;
++  height: auto;
++  --subako-bg: #fffefa;
++  --subako-fg: #283b31;
++  --subako-muted: #788173;
++  --subako-accent: #345b46;
++  --subako-accent-fg: #ffffff;
++  --subako-border: #e1e5da;
++  --subako-surface: #f0f3eb;
++  --subako-error: #a14032;
++  color-scheme: light;
++  font: 13px/1.8 system-ui, sans-serif;
++}
++.subako-tool-args { display: none; }
++.session-sidebar .subako-composer { padding: 12px; gap: 8px; }
++.session-sidebar .subako-input { min-width: 0; min-height: 40px; max-height: 120px; }
++@media (max-width: 760px) {
++  .app-layout.has-session { grid-template-columns: minmax(0, 1fr); grid-template-rows: minmax(0, 3fr) minmax(0, 2fr); }
++  .session-sidebar { border-left: 0; border-top: 1px solid #d9dfd7; }
++  .session-sidebar > header { padding: 10px 16px; }
++  .session-sidebar h2 { margin: 0; font-size: 13px; }
++  .session-sidebar > header > span, .session-sidebar > header p { display: none; }
++}
+```
+
+</details>
+
+
+### ボタンが呼ぶAPI
+
+`SessionControls` は `POST /__hackathon/session` を呼び、返された `sessionId` に切り替えます。[`scripts/new-session.ts`](../scripts/new-session.ts) はこのAPIを提供する運営用コードです。ブラウザーからのセッション作成にはCORSの制約があるため、Vite側で作成しています。普段の会話とclient toolはフロントエンドのSDKから接続します。
+
+上記の `vite.config.ts` のdiffを適用するときも、**スターターのポートを維持します。** TODOなら `newSessionPlugin({ port: 5173, ... })` です。この教材のAPIは[`scripts/apps.mjs`](../scripts/apps.mjs)のポート対応表から、どの初期セッション・agentを使うか決めています。元のアプリのポートと、pluginに渡すポートをそろえます。
+
+[`scripts/new-session.ts`](../scripts/new-session.ts)・[`scripts/apps.mjs`](../scripts/apps.mjs) とルートのSDKはすでに用意されています。自分の別リポジトリに導入する場合は、同等のセッション作成APIを自分のサーバーに置きます。詳細な追加順序は[ワークシート](../README.md)の「任意：自分のTODOにも『新しいセッション』を追加する」を参照してください。
+
+- [ ] 新しいセッションで会話が空になり、アプリのデータは残った。
+- [ ] 同じタブをリロードすると、選び直した会話を再開できた。
+- [ ] EC・Mapでは、ダイアログを開いたままサイドバーでも会話できた。
+
+## 手元のコードでdiffを取り直す
+
+この資料のdiffは作成時点のものです。自分の変更後は、リポジトリのルートで次を実行すると比較できます。Gitにcommitする前でも使えます。
+
+```sh
+git diff --no-index -- apps/todo/src/App.tsx apps/todo-integrated/src/App.tsx
+git diff --no-index -- apps/ec/src/App.tsx apps/ec-coffee/src/App.tsx
+git diff --no-index -- apps/map/src/App.tsx apps/map-coffee/src/App.tsx
+```
+
+`git diff --no-index` は差分があれば終了コード1になります。表示されたdiffを読み、今のアプリの値・操作関数と、AIに追加した入口を確認してください。
