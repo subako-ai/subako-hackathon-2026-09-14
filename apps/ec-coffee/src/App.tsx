@@ -1,17 +1,13 @@
 import { useMemo, useState } from "react";
 import { z } from "zod";
-import { SubakoClient } from "@subako-ai/sdk";
+import { SubakoSessionClient } from "@subako-ai/sdk";
 import { SubakoChat } from "@subako-ai/assistant-ui";
 import { SubakoProvider, useSession, useTool, useToolClient } from "@subako-ai/react";
 import { CatalogView } from "./CatalogView";
 import { useCatalog, type CatalogStore } from "./useCatalog";
 import { cartSummary, searchCatalog, validateCatalog } from "./model";
-import {
-  SessionControls,
-  SafeToolResult,
-  loadSessionId,
-  saveSessionId,
-} from "./SessionControls";
+import { SessionControls, SessionPending, SafeToolResult } from "./SessionControls";
+import { fetchSessionToken, useSessionId } from "./session";
 import catalogData from "../data/catalog.json";
 
 const initialData = validateCatalog(catalogData);
@@ -19,11 +15,15 @@ const initialData = validateCatalog(catalogData);
 function Assistant({
   sessionId,
   catalog,
-  onSessionChange,
+  creating,
+  error,
+  onNew,
 }: {
   sessionId: string;
   catalog: CatalogStore;
-  onSessionChange: (sessionId: string) => void;
+  creating: boolean;
+  error: string;
+  onNew: () => void;
 }) {
   const session = useSession(sessionId);
   const client = useToolClient(session, "shop");
@@ -128,7 +128,7 @@ function Assistant({
   });
 
   return (
-    <SessionControls session={session} onSessionChange={onSessionChange}>
+    <SessionControls session={session} creating={creating} error={error} onNew={onNew}>
       <SubakoChat session={session} components={{ tools: { Fallback: SafeToolResult } }} />
     </SessionControls>
   );
@@ -139,22 +139,15 @@ export default function App() {
     initialData,
     storageKey: "subako-hackathon:ec-coffee:v1",
   });
-  const apiKey = import.meta.env.VITE_SUBAKO_API_KEY?.trim();
   const baseUrl = import.meta.env.VITE_SUBAKO_BASE_URL || "https://api.us.cloud.subako.ai";
-  const initialId = import.meta.env.VITE_SUBAKO_SESSION_EC_COFFEE?.trim() || "";
-  const storageKey = `hackathon:session:ec-coffee:${baseUrl}:${initialId}`;
-  const [sessionId, setSessionId] = useState(() => loadSessionId(storageKey, initialId));
+  const storageKey = `hackathon:session:ec-coffee:${baseUrl}`;
+  const { sessionId, creating, error: sessionError, startNew } = useSessionId(storageKey);
   const [connectionError, setConnectionError] = useState("");
+  // APIキーは持ちません。会話ごとのtokenを開発サーバーから受け取ります。
   const subako = useMemo(
-    () => apiKey ? new SubakoClient({ baseUrl, apiKey }) : null,
-    [baseUrl, apiKey],
+    () => new SubakoSessionClient({ baseUrl, getToken: fetchSessionToken }),
+    [baseUrl],
   );
-
-  function changeSession(id: string) {
-    saveSessionId(storageKey, id);
-    setConnectionError("");
-    setSessionId(id);
-  }
 
   return (
     <div className="app-layout has-session">
@@ -170,19 +163,24 @@ export default function App() {
           <p>好みや予算から、ぴったりの組み合わせを。</p>
         </header>
         <div className="session-content">
-          {subako && sessionId ? (
+          {sessionId ? (
             <SubakoProvider
               key={sessionId}
-              client={subako.sessions}
-              onError={() => setConnectionError("接続できません。APIキーとセッションIDを確認してください。")}
+              client={subako}
+              onError={() => setConnectionError("接続できません。agentのOrigin設定と開発サーバーを確認してください。")}
             >
               {connectionError && <p className="session-error" role="alert">{connectionError}</p>}
-              <Assistant key={sessionId} sessionId={sessionId} catalog={catalog} onSessionChange={changeSession} />
+              <Assistant
+                key={sessionId}
+                sessionId={sessionId}
+                catalog={catalog}
+                creating={creating}
+                error={sessionError}
+                onNew={startNew}
+              />
             </SubakoProvider>
           ) : (
-            <p className="session-notice">
-              .env.localにAPIキーを設定し、<code>npm run agent:publish -- ec-coffee</code>を実行してください。商品やカートはこのまま操作できます。
-            </p>
+            <SessionPending creating={creating} error={sessionError} onRetry={startNew} />
           )}
         </div>
       </aside>

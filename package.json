@@ -23,7 +23,7 @@
     "check": "npm run typecheck && npm test && npm run build",
     "setup": "node scripts/setup.mjs",
     "agent:publish": "node scripts/agent.mjs publish",
-    "session:new": "node scripts/agent.mjs session",
+    "agent:origins": "node scripts/agent.mjs origins",
     "agent:models": "node scripts/agent.mjs models"
   },
   "devDependencies": {

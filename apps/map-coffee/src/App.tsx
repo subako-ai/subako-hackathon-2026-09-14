@@ -1,12 +1,13 @@
 import { useMemo, useState } from "react";
 import { z } from "zod";
-import { SubakoClient } from "@subako-ai/sdk";
+import { SubakoSessionClient } from "@subako-ai/sdk";
 import { SubakoProvider, useSession, useTool, useToolClient } from "@subako-ai/react";
 import { SubakoChat } from "@subako-ai/assistant-ui";
 import { MapView } from "./map-view";
 import { useMapApp, type MapApp } from "./use-map-app";
 import { getVisitSummary, parseMapItems, type MapState, type WalkingRoute } from "./domain";
-import { SessionControls, loadSessionId, saveSessionId, SafeToolResult } from "./SessionControls";
+import { SessionControls, SessionPending, SafeToolResult } from "./SessionControls";
+import { fetchSessionToken, useSessionId } from "./session";
 import data from "./data.json";
 import routeData from "./routes.json";
 
@@ -25,10 +26,12 @@ function mapResult(state: MapState) {
   });
 }
 
-function MapAssistant({ app, sessionId, onSessionChange }: {
+function MapAssistant({ app, sessionId, creating, error, onNew }: {
   app: MapApp;
   sessionId: string;
-  onSessionChange: (id: string) => void;
+  creating: boolean;
+  error: string;
+  onNew: () => void;
 }) {
   const session = useSession(sessionId);
   const client = useToolClient(session, "coffee-map");
@@ -73,7 +76,7 @@ function MapAssistant({ app, sessionId, onSessionChange }: {
   });
 
   return (
-    <SessionControls session={session} onSessionChange={onSessionChange}>
+    <SessionControls session={session} creating={creating} error={error} onNew={onNew}>
       <SubakoChat session={session} components={{ tools: { Fallback: SafeToolResult } }} />
     </SessionControls>
   );
@@ -81,19 +84,15 @@ function MapAssistant({ app, sessionId, onSessionChange }: {
 
 export default function App() {
   const app = useMapApp(initialItems, "hackathon-map-coffee-v1", walkingRoutes);
-  const apiKey = import.meta.env.VITE_SUBAKO_API_KEY?.trim();
   const baseUrl = import.meta.env.VITE_SUBAKO_BASE_URL?.trim() || "https://api.us.cloud.subako.ai";
-  const initialId = import.meta.env.VITE_SUBAKO_SESSION_MAP_COFFEE?.trim() || "";
-  const storageKey = `hackathon:session:map-coffee:${baseUrl}:${initialId}`;
-  const [sessionId, setSessionId] = useState(() => loadSessionId(storageKey, initialId));
+  const storageKey = `hackathon:session:map-coffee:${baseUrl}`;
+  const { sessionId, creating, error: sessionError, startNew } = useSessionId(storageKey);
   const [connectionError, setConnectionError] = useState("");
-  const subako = useMemo(() => apiKey ? new SubakoClient({ baseUrl, apiKey }) : null, [baseUrl, apiKey]);
-
-  function changeSession(id: string) {
-    saveSessionId(storageKey, id);
-    setConnectionError("");
-    setSessionId(id);
-  }
+  // APIキーは持ちません。会話ごとのtokenを開発サーバーから受け取ります。
+  const subako = useMemo(
+    () => new SubakoSessionClient({ baseUrl, getToken: fetchSessionToken }),
+    [baseUrl],
+  );
 
   return (
     <div className="app-layout has-session">
@@ -119,12 +118,19 @@ export default function App() {
               <button onClick={() => setConnectionError("")}>閉じる</button>
             </div>
           )}
-          {subako && sessionId ? (
-            <SubakoProvider client={subako.sessions} onError={() => setConnectionError("接続を確認してください。キー・session ID・Originの設定を確認し、アプリを再起動してください。") }>
-              <MapAssistant key={sessionId} app={app} sessionId={sessionId} onSessionChange={changeSession} />
+          {sessionId ? (
+            <SubakoProvider client={subako} onError={() => setConnectionError("接続を確認してください。agentのOrigin設定と開発サーバーを確認し、アプリを再起動してください。") }>
+              <MapAssistant
+                key={sessionId}
+                app={app}
+                sessionId={sessionId}
+                creating={creating}
+                error={sessionError}
+                onNew={startNew}
+              />
             </SubakoProvider>
           ) : (
-            <p className="session-notice">AIを使うには .env.local にAPIキーを設定し、<code>npm run agent:publish -- map-coffee</code> を実行してアプリを再起動してください。</p>
+            <SessionPending creating={creating} error={sessionError} onRetry={startNew} />
           )}
         </div>
       </aside>

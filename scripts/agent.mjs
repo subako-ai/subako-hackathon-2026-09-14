@@ -2,7 +2,7 @@ import { readFile, writeFile, mkdir, rename } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
 import { loadEnv } from "vite";
 import { SubakoClient } from "@subako-ai/sdk";
-import { appConfig, sessionVariable } from "./apps.mjs";
+import { appConfig, agentVariable } from "./apps.mjs";
 import {
   fingerprint,
   modelFor,
@@ -14,7 +14,7 @@ import {
 const rootUrl = new URL("../", import.meta.url);
 const root = fileURLToPath(rootUrl);
 const env = { ...process.env, ...loadEnv("development", root, "") };
-const key = env.VITE_SUBAKO_API_KEY?.trim();
+const key = env.SUBAKO_API_KEY?.trim();
 async function readJson(path, fallback) {
   try {
     return JSON.parse(await readFile(path, "utf8"));
@@ -30,13 +30,13 @@ async function atomicWrite(path, text) {
 }
 async function run() {
   const [command, id] = process.argv.slice(2);
-  if (!["models", "publish", "session"].includes(command))
+  if (!["models", "publish", "origins"].includes(command))
     throw new Error(
-      "agent:models / agent:publish / session:new を使ってください。",
+      "agent:models / agent:publish / agent:origins を使ってください。",
     );
   if (!key)
     throw new Error(
-      "npm run setup の後、.env.local に VITE_SUBAKO_API_KEY を入力してください。",
+      "npm run setup の後、.env.local に SUBAKO_API_KEY を入力してください。",
     );
   const client = new SubakoClient({
     baseUrl: env.VITE_SUBAKO_BASE_URL || "https://api.us.cloud.subako.ai",
@@ -102,21 +102,17 @@ async function run() {
       allowed_origins: [...new Set([...security.allowed_origins, ...origins])],
     });
   }
-  // 会話は作成時のversionに結び付くため、publish後は必ず作り直します。
-  const session = await client.sessions.create({
-    agent_id: state.agentId,
-    display_name: app.title,
-  });
+  // 会話はアプリが作るので、ここで渡すのはagentの居場所だけです。
   const envPath = new URL(".env.local", rootUrl);
   const current = await readFile(envPath, "utf8");
   await atomicWrite(
     envPath,
-    replaceEnvValue(current, sessionVariable(id), session.id),
+    replaceEnvValue(current, agentVariable(id), state.agentId),
   );
-  await persist({ ...state, sessionId: session.id });
   console.log(`${app.title} の準備が完了しました。`);
-  console.log("APIキーとsession tokenは表示しません。");
+  console.log("APIキーは表示しません。");
   console.log(`開発サーバーを再起動してください: npm run dev -- ${id}`);
+  console.log("指示を変えた後は、画面の「新しいセッション」で会話を作り直します。");
 }
 run().catch((error) => {
   const message = String(error.message || error);

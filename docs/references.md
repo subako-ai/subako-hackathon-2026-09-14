@@ -92,7 +92,11 @@ subako agent publish <agent-id> --config agent.json --model-provider <provider-i
 
 `agent.json` の `model.model` を一覧に存在するモデルIDに必ず置き換えます。IDの誤りはpublish時に検知されず、実行時に失敗する可能性があります。publish後も既存セッションは以前のバージョンのままなので、新しいセッションを作ります。
 
-現在のサーバー実装は、ブラウザーからのクロスオリジン通信を `/v1/sessions/{session_id}` 以下に限って許可します。APIキーをブラウザーに渡しても、新規セッション作成・エージェントpublish・セキュリティ設定はブラウザーから直接呼び出せません。初期設定はNodeスクリプトで準備し、ブラウザーは作成済みセッションに接続します。完成例の「新しいセッション」ボタンは、同じOriginにあるViteの `POST /__hackathon/session` を経由して作成します。完成例の `vite.config.ts` にこのルートを登録し、未連携の3アプリには登録していません。このルートは設定済みセッションのエージェントを使い、ブラウザーには新しいIDだけを返します。開発・previewの両方で使え、CLIの保存ログイン情報を読む必要はありません。previewも各アプリの5173〜5178を使うため、開発サーバーを止めてからビルド・previewを実行します。envを変更した場合は再ビルドします。
+現在のサーバー実装は、ブラウザーからのクロスオリジン通信を `/v1/sessions/{session_id}` 以下に限って許可します。新規セッション作成・エージェントpublish・セキュリティ設定は、どのOriginからも直接呼び出せません。
+
+この教材では**APIキーをブラウザーへ渡しません**。キーを持つのは開発サーバーだけで、Viteに2つの口を置いています。`POST /__subako/session` が既定のエージェントに会話を作ってIDだけを返し、`POST /__subako/token` がその会話に接続するtokenを発行します。ブラウザーは `SubakoSessionClient` にtokenの取得関数（`getToken`）を渡し、会話への接続とclient toolだけをAPIへ直接つなぎます。この接続はエージェントの `allowed_origins` でOriginごとに許可されます。tokenの期限切れは、SDKが `getToken` を呼び直して回復します。
+
+2つの口は [`scripts/subako-dev-api.ts`](../scripts/subako-dev-api.ts) にあり、6アプリすべての `vite.config.ts` に配線済みです。エージェントのpublishはNodeスクリプトで行い、`.env.local` の `SUBAKO_AGENT_*` を更新します。開発・previewの両方で使え、CLIの保存ログイン情報を読む必要はありません。previewも各アプリの5173〜5178を使うため、開発サーバーを止めてからビルド・previewを実行します。envを変更した場合は再ビルドします。
 
 ### 運営が確認すること
 

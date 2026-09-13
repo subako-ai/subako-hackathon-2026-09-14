@@ -1,9 +1,10 @@
 import { useEffect, useRef, useState, type FormEvent } from "react";
 import { z } from "zod";
-import { SubakoClient } from "@subako-ai/sdk";
+import { SubakoSessionClient } from "@subako-ai/sdk";
 import { SubakoProvider, useSession, useTool, useToolClient } from "@subako-ai/react";
 import { SubakoChat } from "@subako-ai/assistant-ui";
-import { loadSessionId, saveSessionId, SessionControls, SafeToolResult } from "./SessionControls";
+import { SessionControls, SessionPending, SafeToolResult } from "./SessionControls";
+import { fetchSessionToken, useSessionId } from "./session";
 import { createTodo, parseTodos, setTodoDone, type Todo } from "./model";
 import data from "./data.json";
 import "./style.css";
@@ -11,18 +12,19 @@ import "./layout.css";
 
 const initialItems: Todo[] = parseTodos(data);
 const storageKey = "hackathon:todo-integrated";
-const apiKey = import.meta.env.VITE_SUBAKO_API_KEY?.trim();
 const baseUrl = import.meta.env.VITE_SUBAKO_BASE_URL || "https://api.us.cloud.subako.ai";
-const initialSessionId = import.meta.env.VITE_SUBAKO_SESSION_TODO_INTEGRATED?.trim() || "";
-const sessionStorageKey = `hackathon:session:todo-integrated:${baseUrl}:${initialSessionId}`;
-const subako = apiKey ? new SubakoClient({ baseUrl, apiKey }) : null;
+const sessionStorageKey = `hackathon:session:todo-integrated:${baseUrl}`;
+// APIキーは持ちません。会話ごとのtokenを開発サーバーから受け取ります。
+const subako = new SubakoSessionClient({ baseUrl, getToken: fetchSessionToken });
 
-function Assistant({ getItems, add, complete, sessionId, onSessionChange }: {
+function Assistant({ getItems, add, complete, sessionId, creating, error, onNew }: {
   getItems: () => Todo[];
   add: (title: string) => Todo;
   complete: (id: string, done: boolean) => Todo;
   sessionId: string;
-  onSessionChange: (id: string) => void;
+  creating: boolean;
+  error: string;
+  onNew: () => void;
 }) {
   const session = useSession(sessionId);
   const client = useToolClient(session, "todo");
@@ -45,20 +47,15 @@ function Assistant({ getItems, add, complete, sessionId, onSessionChange }: {
   });
 
   return (
-    <SessionControls session={session} onSessionChange={onSessionChange}>
+    <SessionControls session={session} creating={creating} error={error} onNew={onNew}>
       <SubakoChat session={session} components={{ tools: { Fallback: SafeToolResult } }} />
     </SessionControls>
   );
 }
 
 export default function App() {
-  const [sessionId, setSessionId] = useState(() => loadSessionId(sessionStorageKey, initialSessionId));
+  const { sessionId, creating, error: sessionError, startNew } = useSessionId(sessionStorageKey);
   const [connectionError, setConnectionError] = useState("");
-  function changeSession(id: string) {
-    saveSessionId(sessionStorageKey, id);
-    setSessionId(id);
-    setConnectionError("");
-  }
   const [initial] = useState(() => {
     try {
       const saved = localStorage.getItem(storageKey);
@@ -243,12 +240,21 @@ export default function App() {
         </header>
         <div className="session-content">
           {connectionError && <p className="session-error" role="alert">{connectionError}</p>}
-          {subako && sessionId ? (
-            <SubakoProvider client={subako.sessions} onError={() => setConnectionError("接続できません。APIキー・セッション・Originの設定を確認してください。") }>
-              <Assistant key={sessionId} getItems={getItems} add={add} complete={complete} sessionId={sessionId} onSessionChange={changeSession} />
+          {sessionId ? (
+            <SubakoProvider client={subako} onError={() => setConnectionError("接続できません。agentのOrigin設定と開発サーバーを確認してください。") }>
+              <Assistant
+                key={sessionId}
+                getItems={getItems}
+                add={add}
+                complete={complete}
+                sessionId={sessionId}
+                creating={creating}
+                error={sessionError}
+                onNew={startNew}
+              />
             </SubakoProvider>
           ) : (
-            <p>APIキーを設定し、<code>npm run agent:publish -- todo-integrated</code> を実行して再起動してください。</p>
+            <SessionPending creating={creating} error={sessionError} onRetry={startNew} />
           )}
         </div>
       </aside>

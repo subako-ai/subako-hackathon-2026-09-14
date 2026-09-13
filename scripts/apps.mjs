@@ -13,5 +13,5 @@ export function appConfig(id) {
     );
   return apps[id];
 }
-export const sessionVariable = (id) =>
-  `VITE_SUBAKO_SESSION_${id.replaceAll("-", "_").toUpperCase()}`;
+export const agentVariable = (id) =>
+  `SUBAKO_AGENT_${id.replaceAll("-", "_").toUpperCase()}`;

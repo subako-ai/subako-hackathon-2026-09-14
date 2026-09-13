@@ -17,7 +17,7 @@
 3組とも、次の順序で読みます。
 
 1. **SDKをインストールする。** `package.json` にSubako・assistant-ui・Zodの依存を追加します。
-2. **会話につなぐ。** `SubakoClient` → `SubakoProvider` → `useSession` で、publish後に作成したセッションを使います。
+2. **会話につなぐ。** `SubakoSessionClient` → `SubakoProvider` → `useSession` でつなぎます。会話はアプリが作り、IDを `localStorage` に覚えます。
 3. **既存の操作を登録する。** `useToolClient` と `useTool` を追加し、`execute` から今のstateを読むか、ボタンでも使っている関数を呼びます。
 4. **会話を表示する。** 既存画面の隣にサイドバーを置き、`SubakoChat` にセッションを渡します。
 5. **必要な追加UIを足す。** 完成例には新しいセッションのボタン、接続エラー表示、ツール結果の表示調整もあります。
@@ -35,7 +35,7 @@
 | npmの対象 | `@hackathon/todo` | `@hackathon/ec` | `@hackathon/map` |
 | publish・起動コマンドの引数 | `todo` | `ec` | `map` |
 | ポート | `5173` | `5177` | `5175` |
-| 初期セッションの変数 | `VITE_SUBAKO_SESSION_TODO` | `VITE_SUBAKO_SESSION_EC` | `VITE_SUBAKO_SESSION_MAP` |
+| agentの変数（publishが更新） | `SUBAKO_AGENT_TODO` | `SUBAKO_AGENT_EC` | `SUBAKO_AGENT_MAP` |
 | アプリのデータ保存キー | `hackathon:todo` | `subako-hackathon:ec:v1` | `hackathon-map-v1` |
 | 会話の保存キーのアプリ名 | `todo` | `ec` | `map` |
 
@@ -49,7 +49,7 @@ npm run agent:publish -- todo
 npm run dev -- todo
 ```
 
-APIキーはルートの `.env.local` の `VITE_SUBAKO_API_KEY` からフロントエンドに渡します。`.env.local` はすでにGitの対象外です。publishスクリプトが対象アプリのagent・許可Origin・sessionを準備し、対応する環境変数を更新します。起動済みなら開発サーバーを再起動します。
+APIキーはルートの `.env.local` の `SUBAKO_API_KEY` に置きます。`VITE_` が付かないので**ブラウザーへは渡りません**。`.env.local` はすでにGitの対象外です。publishスクリプトが対象アプリのagentと許可Originを準備し、`SUBAKO_AGENT_*` を更新します。起動済みなら開発サーバーを再起動します。
 
 `package.json` の依存の追加に加え、`npm install` によってルートの `package-lock.json` も更新されます。ルートのSDKは運営が用意したスクリプト用で、未連携アプリ自身にはSDK依存がありません。
 
@@ -74,6 +74,7 @@ APIキーはルートの `.env.local` の `VITE_SUBAKO_API_KEY` からフロン�
 | `package.json` | SDK・assistant-ui・Zodの追加。`name` の差分は完成例を別アプリとして起動するため |
 | `src/App.tsx` | 接続、3つのツール、サイドバー、会話選択のstateを追加 |
 | `src/session.css`（追加） | サイドバーと会話の見た目 |
+| `src/session.ts`（追加） | 会話の作成・localStorage・tokenの受け取り。全文は[追加UIの差分](#session-answer) |
 | `src/SessionControls.tsx`（追加） | 新しいセッションとツール結果の表示。全文は[追加UIの差分](#session-answer) |
 | `vite.config.ts` | 新しいセッションを作るAPIを追加。最小のチャット連携では変更不要 |
 
@@ -119,13 +120,14 @@ APIキーはルートの `.env.local` の `VITE_SUBAKO_API_KEY` からフロン�
 ```diff
 --- apps/todo/src/App.tsx
 +++ apps/todo-integrated/src/App.tsx
-@@ -1,13 +1,64 @@
+@@ -1,13 +1,61 @@
  import { useEffect, useRef, useState, type FormEvent } from "react";
 +import { z } from "zod";
-+import { SubakoClient } from "@subako-ai/sdk";
++import { SubakoSessionClient } from "@subako-ai/sdk";
 +import { SubakoProvider, useSession, useTool, useToolClient } from "@subako-ai/react";
 +import { SubakoChat } from "@subako-ai/assistant-ui";
-+import { loadSessionId, saveSessionId, SessionControls, SafeToolResult } from "./SessionControls";
++import { SessionControls, SessionPending, SafeToolResult } from "./SessionControls";
++import { fetchSessionToken, useSessionId } from "./session";
  import { createTodo, parseTodos, setTodoDone, type Todo } from "./model";
  import data from "./data.json";
  import "./style.css";
@@ -134,18 +136,19 @@ APIキーはルートの `.env.local` の `VITE_SUBAKO_API_KEY` からフロン�
  const initialItems: Todo[] = parseTodos(data);
 -const storageKey = "hackathon:todo";
 +const storageKey = "hackathon:todo-integrated";
-+const apiKey = import.meta.env.VITE_SUBAKO_API_KEY?.trim();
 +const baseUrl = import.meta.env.VITE_SUBAKO_BASE_URL || "https://api.us.cloud.subako.ai";
-+const initialSessionId = import.meta.env.VITE_SUBAKO_SESSION_TODO_INTEGRATED?.trim() || "";
-+const sessionStorageKey = `hackathon:session:todo-integrated:${baseUrl}:${initialSessionId}`;
-+const subako = apiKey ? new SubakoClient({ baseUrl, apiKey }) : null;
++const sessionStorageKey = `hackathon:session:todo-integrated:${baseUrl}`;
++// APIキーは持ちません。会話ごとのtokenを開発サーバーから受け取ります。
++const subako = new SubakoSessionClient({ baseUrl, getToken: fetchSessionToken });
 +
-+function Assistant({ getItems, add, complete, sessionId, onSessionChange }: {
++function Assistant({ getItems, add, complete, sessionId, creating, error, onNew }: {
 +  getItems: () => Todo[];
 +  add: (title: string) => Todo;
 +  complete: (id: string, done: boolean) => Todo;
 +  sessionId: string;
-+  onSessionChange: (id: string) => void;
++  creating: boolean;
++  error: string;
++  onNew: () => void;
 +}) {
 +  const session = useSession(sessionId);
 +  const client = useToolClient(session, "todo");
@@ -168,24 +171,19 @@ APIキーはルートの `.env.local` の `VITE_SUBAKO_API_KEY` からフロン�
 +  });
 +
 +  return (
-+    <SessionControls session={session} onSessionChange={onSessionChange}>
++    <SessionControls session={session} creating={creating} error={error} onNew={onNew}>
 +      <SubakoChat session={session} components={{ tools: { Fallback: SafeToolResult } }} />
 +    </SessionControls>
 +  );
 +}
  
  export default function App() {
-+  const [sessionId, setSessionId] = useState(() => loadSessionId(sessionStorageKey, initialSessionId));
++  const { sessionId, creating, error: sessionError, startNew } = useSessionId(sessionStorageKey);
 +  const [connectionError, setConnectionError] = useState("");
-+  function changeSession(id: string) {
-+    saveSessionId(sessionStorageKey, id);
-+    setSessionId(id);
-+    setConnectionError("");
-+  }
    const [initial] = useState(() => {
      try {
        const saved = localStorage.getItem(storageKey);
-@@ -68,7 +119,7 @@
+@@ -68,7 +116,7 @@ export default function App() {
      }
    }
    return (
@@ -194,7 +192,7 @@ APIキーはルートの `.env.local` の `VITE_SUBAKO_API_KEY` からフロン�
        <div className="app-panel">
          <div className="app-content">
            <div className="todo-shell">
-@@ -184,6 +235,23 @@
+@@ -184,6 +232,32 @@ export default function App() {
            </div>
          </div>
        </div>
@@ -206,12 +204,21 @@ APIキーはルートの `.env.local` の `VITE_SUBAKO_API_KEY` からフロン�
 +        </header>
 +        <div className="session-content">
 +          {connectionError && <p className="session-error" role="alert">{connectionError}</p>}
-+          {subako && sessionId ? (
-+            <SubakoProvider client={subako.sessions} onError={() => setConnectionError("接続できません。APIキー・セッション・Originの設定を確認してください。") }>
-+              <Assistant key={sessionId} getItems={getItems} add={add} complete={complete} sessionId={sessionId} onSessionChange={changeSession} />
++          {sessionId ? (
++            <SubakoProvider client={subako} onError={() => setConnectionError("接続できません。agentのOrigin設定と開発サーバーを確認してください。") }>
++              <Assistant
++                key={sessionId}
++                getItems={getItems}
++                add={add}
++                complete={complete}
++                sessionId={sessionId}
++                creating={creating}
++                error={sessionError}
++                onNew={startNew}
++              />
 +            </SubakoProvider>
 +          ) : (
-+            <p>APIキーを設定し、<code>npm run agent:publish -- todo-integrated</code> を実行して再起動してください。</p>
++            <SessionPending creating={creating} error={sessionError} onRetry={startNew} />
 +          )}
 +        </div>
 +      </aside>
@@ -229,37 +236,42 @@ APIキーはルートの `.env.local` の `VITE_SUBAKO_API_KEY` からフロン�
 ```diff
 --- apps/todo/vite.config.ts
 +++ apps/todo-integrated/vite.config.ts
-@@ -1,19 +1,20 @@
- import { fileURLToPath } from "node:url";
- import { defineConfig } from "vite";
- import react from "@vitejs/plugin-react";
-+import { newSessionPlugin } from "../../scripts/new-session.ts";
- 
+@@ -6,7 +6,7 @@ import { subakoDevApi } from "../../scripts/subako-dev-api.ts";
  const envDir = fileURLToPath(new URL("../../", import.meta.url));
  const codespace = process.env.CODESPACE_NAME;
  const domain = process.env.GITHUB_CODESPACES_PORT_FORWARDING_DOMAIN;
 -const host = codespace && domain ? `${codespace}-5173.${domain}` : undefined;
 +const host = codespace && domain ? `${codespace}-5174.${domain}` : undefined;
  
- export default defineConfig({
--  plugins: [react()],
-+  plugins: [react(), newSessionPlugin({ port: 5174, envDir, allowedOrigin: host ? `https://${host}` : undefined })],
-   envDir,
--  preview: { port: 5173, strictPort: true },
-+  preview: { port: 5174, strictPort: true },
-   server: {
-     host: "0.0.0.0",
--    port: 5173,
-+    port: 5174,
-     strictPort: true,
-     ...(host ? { allowedHosts: [host] } : {}),
-   },
+ export default defineConfig(({ mode }) => {
+   const env = loadEnv(mode, envDir, ["SUBAKO_", "VITE_SUBAKO_"]);
+@@ -16,16 +16,16 @@ export default defineConfig(({ mode }) => {
+       // APIキーを持つのは開発サーバーだけです。ブラウザーはこの口から会話に入ります。
+       subakoDevApi({
+         apiKey: env.SUBAKO_API_KEY ?? "",
+-        agentId: env.SUBAKO_AGENT_TODO ?? "",
++        agentId: env.SUBAKO_AGENT_TODO_INTEGRATED ?? "",
+         baseUrl: env.VITE_SUBAKO_BASE_URL || "https://api.us.cloud.subako.ai",
+-        title: "TODO・スタート",
++        title: "TODO・Subako連携",
+       }),
+     ],
+     envDir,
+-    preview: { port: 5173, strictPort: true },
++    preview: { port: 5174, strictPort: true },
+     server: {
+       host: "0.0.0.0",
+-      port: 5173,
++      port: 5174,
+       strictPort: true,
+       ...(host ? { allowedHosts: [host] } : {}),
+     },
 ```
 
 </details>
 
 
-最初は `SessionControls` を使わず、`return <SubakoChat session={session} />` だけでも会話できます。その場合は `session.css` を `App.tsx` で直接importします。完成例では `SessionControls.tsx` がこのCSSをimportしています。3つのツールを残したまま、後から会話の切り替えを追加できます。
+最初は `SessionControls` を使わず、`return <SubakoChat session={session} />` だけでも会話できます。その場合は `session.css` を `App.tsx` で直接importします。`session.ts` は会話を作るのに必要なので、最小の連携でもコピーします。完成例では `SessionControls.tsx` がこのCSSをimportしています。3つのツールを残したまま、後から会話の切り替えを追加できます。
 
 - [ ] 手でTODOを1件追加し、AIに現在の一覧を読んでもらえた。
 - [ ] AIで追加したTODOを手で完了にし、その変更をAIの回答に反映できた。
@@ -291,6 +303,7 @@ APIキーはルートの `.env.local` の `VITE_SUBAKO_API_KEY` からフロン�
 | ファイル | 変更内容 |
 | --- | --- |
 | `package.json`・`src/App.tsx` | SDK・Zodの依存、接続、ツール、会話の表示を追加 |
+| `src/session.ts`（追加） | 会話の作成・localStorage・tokenの受け取り。全文は[追加UIの差分](#session-answer) |
 | `src/session.css`・`src/SessionControls.tsx`（追加） | 会話用のCSSと追加UI。全文は[追加UIの差分](#session-answer) |
 | `vite.config.ts` | 新しいセッションを作るAPIを追加 |
 | `src/CatalogView.tsx`・`src/style.css` | 完成例側の文言・商品イラストをコーヒー向けに編集 |
@@ -344,10 +357,10 @@ SDK導入時は自分の `data/catalog.json`・`initialData`・`CatalogView` を
 ```diff
 --- apps/ec/src/App.tsx
 +++ apps/ec-coffee/src/App.tsx
-@@ -1,24 +1,191 @@
+@@ -1,24 +1,189 @@
 +import { useMemo, useState } from "react";
 +import { z } from "zod";
-+import { SubakoClient } from "@subako-ai/sdk";
++import { SubakoSessionClient } from "@subako-ai/sdk";
 +import { SubakoChat } from "@subako-ai/assistant-ui";
 +import { SubakoProvider, useSession, useTool, useToolClient } from "@subako-ai/react";
  import { CatalogView } from "./CatalogView";
@@ -355,12 +368,8 @@ SDK導入時は自分の `data/catalog.json`・`initialData`・`CatalogView` を
 -import { validateCatalog } from "./model";
 +import { useCatalog, type CatalogStore } from "./useCatalog";
 +import { cartSummary, searchCatalog, validateCatalog } from "./model";
-+import {
-+  SessionControls,
-+  SafeToolResult,
-+  loadSessionId,
-+  saveSessionId,
-+} from "./SessionControls";
++import { SessionControls, SessionPending, SafeToolResult } from "./SessionControls";
++import { fetchSessionToken, useSessionId } from "./session";
  import catalogData from "../data/catalog.json";
  
  const initialData = validateCatalog(catalogData);
@@ -368,11 +377,15 @@ SDK導入時は自分の `data/catalog.json`・`initialData`・`CatalogView` を
 +function Assistant({
 +  sessionId,
 +  catalog,
-+  onSessionChange,
++  creating,
++  error,
++  onNew,
 +}: {
 +  sessionId: string;
 +  catalog: CatalogStore;
-+  onSessionChange: (sessionId: string) => void;
++  creating: boolean;
++  error: string;
++  onNew: () => void;
 +}) {
 +  const session = useSession(sessionId);
 +  const client = useToolClient(session, "shop");
@@ -477,7 +490,7 @@ SDK導入時は自分の `data/catalog.json`・`initialData`・`CatalogView` を
 +  });
 +
 +  return (
-+    <SessionControls session={session} onSessionChange={onSessionChange}>
++    <SessionControls session={session} creating={creating} error={error} onNew={onNew}>
 +      <SubakoChat session={session} components={{ tools: { Fallback: SafeToolResult } }} />
 +    </SessionControls>
 +  );
@@ -489,22 +502,15 @@ SDK導入時は自分の `data/catalog.json`・`initialData`・`CatalogView` を
 -    storageKey: "subako-hackathon:ec:v1",
 +    storageKey: "subako-hackathon:ec-coffee:v1",
    });
-+  const apiKey = import.meta.env.VITE_SUBAKO_API_KEY?.trim();
 +  const baseUrl = import.meta.env.VITE_SUBAKO_BASE_URL || "https://api.us.cloud.subako.ai";
-+  const initialId = import.meta.env.VITE_SUBAKO_SESSION_EC_COFFEE?.trim() || "";
-+  const storageKey = `hackathon:session:ec-coffee:${baseUrl}:${initialId}`;
-+  const [sessionId, setSessionId] = useState(() => loadSessionId(storageKey, initialId));
++  const storageKey = `hackathon:session:ec-coffee:${baseUrl}`;
++  const { sessionId, creating, error: sessionError, startNew } = useSessionId(storageKey);
 +  const [connectionError, setConnectionError] = useState("");
++  // APIキーは持ちません。会話ごとのtokenを開発サーバーから受け取ります。
 +  const subako = useMemo(
-+    () => apiKey ? new SubakoClient({ baseUrl, apiKey }) : null,
-+    [baseUrl, apiKey],
++    () => new SubakoSessionClient({ baseUrl, getToken: fetchSessionToken }),
++    [baseUrl],
 +  );
-+
-+  function changeSession(id: string) {
-+    saveSessionId(storageKey, id);
-+    setConnectionError("");
-+    setSessionId(id);
-+  }
  
    return (
 -    <div className="app-layout">
@@ -521,19 +527,24 @@ SDK導入時は自分の `data/catalog.json`・`initialData`・`CatalogView` を
 +          <p>好みや予算から、ぴったりの組み合わせを。</p>
 +        </header>
 +        <div className="session-content">
-+          {subako && sessionId ? (
++          {sessionId ? (
 +            <SubakoProvider
 +              key={sessionId}
-+              client={subako.sessions}
-+              onError={() => setConnectionError("接続できません。APIキーとセッションIDを確認してください。")}
++              client={subako}
++              onError={() => setConnectionError("接続できません。agentのOrigin設定と開発サーバーを確認してください。")}
 +            >
 +              {connectionError && <p className="session-error" role="alert">{connectionError}</p>}
-+              <Assistant key={sessionId} sessionId={sessionId} catalog={catalog} onSessionChange={changeSession} />
++              <Assistant
++                key={sessionId}
++                sessionId={sessionId}
++                catalog={catalog}
++                creating={creating}
++                error={sessionError}
++                onNew={startNew}
++              />
 +            </SubakoProvider>
 +          ) : (
-+            <p className="session-notice">
-+              .env.localにAPIキーを設定し、<code>npm run agent:publish -- ec-coffee</code>を実行してください。商品やカートはこのまま操作できます。
-+            </p>
++            <SessionPending creating={creating} error={sessionError} onRetry={startNew} />
 +          )}
 +        </div>
 +      </aside>
@@ -551,7 +562,7 @@ SDK導入時は自分の `data/catalog.json`・`initialData`・`CatalogView` を
 ```diff
 --- apps/ec/src/useCatalog.ts
 +++ apps/ec-coffee/src/useCatalog.ts
-@@ -164,6 +164,8 @@
+@@ -164,6 +164,8 @@ export function useCatalog({
  
    return {
      state,
@@ -570,33 +581,36 @@ SDK導入時は自分の `data/catalog.json`・`initialData`・`CatalogView` を
 ```diff
 --- apps/ec/vite.config.ts
 +++ apps/ec-coffee/vite.config.ts
-@@ -1,21 +1,23 @@
- import { fileURLToPath } from "node:url";
- import { defineConfig } from "vite";
- import react from "@vitejs/plugin-react";
-+import { newSessionPlugin } from "../../scripts/new-session.ts";
- 
- const root = fileURLToPath(new URL("../../", import.meta.url));
+@@ -6,7 +6,7 @@ import { subakoDevApi } from "../../scripts/subako-dev-api.ts";
+ const envDir = fileURLToPath(new URL("../../", import.meta.url));
  const codespace = process.env.CODESPACE_NAME;
  const domain = process.env.GITHUB_CODESPACES_PORT_FORWARDING_DOMAIN;
 -const host = codespace && domain ? `${codespace}-5177.${domain}` : undefined;
 +const host = codespace && domain ? `${codespace}-5178.${domain}` : undefined;
  
- export default defineConfig({
-   plugins: [
-     react(),
-+      newSessionPlugin({ port: 5178, envDir: root, allowedOrigin: host ? `https://${host}` : undefined }),
-   ],
-   envDir: root,
--  preview: { port: 5177, strictPort: true },
-+  preview: { port: 5178, strictPort: true },
-   server: {
-     host: "0.0.0.0",
--    port: 5177,
-+    port: 5178,
-     strictPort: true,
-     ...(host ? { allowedHosts: [host] } : {}),
-   },
+ export default defineConfig(({ mode }) => {
+   const env = loadEnv(mode, envDir, ["SUBAKO_", "VITE_SUBAKO_"]);
+@@ -16,16 +16,16 @@ export default defineConfig(({ mode }) => {
+       // APIキーを持つのは開発サーバーだけです。ブラウザーはこの口から会話に入ります。
+       subakoDevApi({
+         apiKey: env.SUBAKO_API_KEY ?? "",
+-        agentId: env.SUBAKO_AGENT_EC ?? "",
++        agentId: env.SUBAKO_AGENT_EC_COFFEE ?? "",
+         baseUrl: env.VITE_SUBAKO_BASE_URL || "https://api.us.cloud.subako.ai",
+-        title: "EC・スタート",
++        title: "コーヒー・バンドル",
+       }),
+     ],
+     envDir,
+-    preview: { port: 5177, strictPort: true },
++    preview: { port: 5178, strictPort: true },
+     server: {
+       host: "0.0.0.0",
+-      port: 5177,
++      port: 5178,
+       strictPort: true,
+       ...(host ? { allowedHosts: [host] } : {}),
+     },
 ```
 
 </details>
@@ -646,7 +660,7 @@ SDK導入時は自分の `data/catalog.json`・`initialData`・`CatalogView` を
 ```diff
 --- apps/ec/src/CatalogView.tsx
 +++ apps/ec-coffee/src/CatalogView.tsx
-@@ -26,22 +26,22 @@
+@@ -26,22 +26,22 @@ function ProductArt({
  }) {
    return (
      <div
@@ -675,7 +689,7 @@ SDK導入時は自分の `data/catalog.json`・`initialData`・`CatalogView` を
        </span>
      </div>
    );
-@@ -78,7 +78,7 @@
+@@ -78,7 +78,7 @@ export function CatalogView({ store }: { store: CatalogStore }) {
          <a className="ec-brand" href="/" aria-label="ショップのホーム">
            <span className="ec-brand-symbol">s.</span>
            <span>
@@ -684,7 +698,7 @@ SDK導入時は自分の `data/catalog.json`・`initialData`・`CatalogView` を
              <small>SUBAKO HACKATHON</small>
            </span>
          </a>
-@@ -104,16 +104,16 @@
+@@ -104,16 +104,16 @@ export function CatalogView({ store }: { store: CatalogStore }) {
          <section className="ec-intro">
            <div>
              <p className="ec-eyebrow">
@@ -705,7 +719,7 @@ SDK導入時は自分の `data/catalog.json`・`initialData`・`CatalogView` を
              </span>
            </div>
          </section>
-@@ -130,7 +130,7 @@
+@@ -130,7 +130,7 @@ export function CatalogView({ store }: { store: CatalogStore }) {
          )}
          <p role="status" className="ec-notice">
            {state.notice ||
@@ -714,7 +728,7 @@ SDK導入時は自分の `data/catalog.json`・`initialData`・`CatalogView` を
          </p>
  
          <div className="ec-layout">
-@@ -397,7 +397,7 @@
+@@ -397,7 +397,7 @@ export function CatalogView({ store }: { store: CatalogStore }) {
          <footer className="ec-footer">
            <span>SUBAKO HACKATHON · 2026.09.14</span>
            <span>
@@ -733,7 +747,7 @@ SDK導入時は自分の `data/catalog.json`・`initialData`・`CatalogView` を
 ```diff
 --- apps/ec/src/style.css
 +++ apps/ec-coffee/src/style.css
-@@ -286,6 +286,9 @@
+@@ -286,6 +286,9 @@ input:focus-visible {
    background: #e9ede4;
    overflow: hidden;
  }
@@ -743,7 +757,7 @@ SDK導入時は自分の `data/catalog.json`・`initialData`・`CatalogView` を
  .ec-product:nth-child(3n + 2) .ec-product-art {
    background: #e9ede6;
  }
-@@ -300,30 +303,50 @@
+@@ -300,30 +303,50 @@ input:focus-visible {
    font-size: 9px;
    letter-spacing: 0.05em;
  }
@@ -802,7 +816,7 @@ SDK導入時は自分の `data/catalog.json`・`initialData`・`CatalogView` を
    font-size: 7px;
    letter-spacing: 0.04em;
    color: #8b8e7f;
-@@ -807,9 +830,11 @@
+@@ -807,9 +830,11 @@ input:focus-visible {
    .ec-product-art {
      height: 155px;
    }
@@ -850,6 +864,7 @@ SDK導入時は自分の `data/catalog.json`・`initialData`・`CatalogView` を
 | ファイル | 変更内容 |
 | --- | --- |
 | `package.json`・`src/App.tsx` | SDK・Zodの依存、接続、ツール、会話の表示を追加 |
+| `src/session.ts`（追加） | 会話の作成・localStorage・tokenの受け取り。全文は[追加UIの差分](#session-answer) |
 | `src/session.css`・`src/SessionControls.tsx`（追加） | 会話用のCSSと追加UI。全文は[追加UIの差分](#session-answer) |
 | `vite.config.ts` | 新しいセッションを作るAPIを追加 |
 | `src/domain.ts`・`src/use-map-app.ts`・`src/map-canvas.tsx`・`src/map-view.tsx`・`src/domain.test.ts` | 完成例側に保存済み徒歩経路の計算・描画・表示とテストを追加 |
@@ -911,10 +926,10 @@ Mapの既定の出発地は画面にも表示している渋谷駅です。座�
 ```diff
 --- apps/map/src/App.tsx
 +++ apps/map-coffee/src/App.tsx
-@@ -1,25 +1,133 @@
+@@ -1,25 +1,139 @@
 +import { useMemo, useState } from "react";
 +import { z } from "zod";
-+import { SubakoClient } from "@subako-ai/sdk";
++import { SubakoSessionClient } from "@subako-ai/sdk";
 +import { SubakoProvider, useSession, useTool, useToolClient } from "@subako-ai/react";
 +import { SubakoChat } from "@subako-ai/assistant-ui";
  import { MapView } from "./map-view";
@@ -922,7 +937,8 @@ Mapの既定の出発地は画面にも表示している渋谷駅です。座�
 -import { parseMapItems } from "./domain";
 +import { useMapApp, type MapApp } from "./use-map-app";
 +import { getVisitSummary, parseMapItems, type MapState, type WalkingRoute } from "./domain";
-+import { SessionControls, loadSessionId, saveSessionId, SafeToolResult } from "./SessionControls";
++import { SessionControls, SessionPending, SafeToolResult } from "./SessionControls";
++import { fetchSessionToken, useSessionId } from "./session";
  import data from "./data.json";
 +import routeData from "./routes.json";
  
@@ -941,10 +957,12 @@ Mapの既定の出発地は画面にも表示している渋谷駅です。座�
 +  });
 +}
 +
-+function MapAssistant({ app, sessionId, onSessionChange }: {
++function MapAssistant({ app, sessionId, creating, error, onNew }: {
 +  app: MapApp;
 +  sessionId: string;
-+  onSessionChange: (id: string) => void;
++  creating: boolean;
++  error: string;
++  onNew: () => void;
 +}) {
 +  const session = useSession(sessionId);
 +  const client = useToolClient(session, "coffee-map");
@@ -989,7 +1007,7 @@ Mapの既定の出発地は画面にも表示している渋谷駅です。座�
 +  });
 +
 +  return (
-+    <SessionControls session={session} onSessionChange={onSessionChange}>
++    <SessionControls session={session} creating={creating} error={error} onNew={onNew}>
 +      <SubakoChat session={session} components={{ tools: { Fallback: SafeToolResult } }} />
 +    </SessionControls>
 +  );
@@ -998,19 +1016,15 @@ Mapの既定の出発地は画面にも表示している渋谷駅です。座�
  export default function App() {
 -  const app = useMapApp(initialItems, "hackathon-map-v1");
 +  const app = useMapApp(initialItems, "hackathon-map-coffee-v1", walkingRoutes);
-+  const apiKey = import.meta.env.VITE_SUBAKO_API_KEY?.trim();
 +  const baseUrl = import.meta.env.VITE_SUBAKO_BASE_URL?.trim() || "https://api.us.cloud.subako.ai";
-+  const initialId = import.meta.env.VITE_SUBAKO_SESSION_MAP_COFFEE?.trim() || "";
-+  const storageKey = `hackathon:session:map-coffee:${baseUrl}:${initialId}`;
-+  const [sessionId, setSessionId] = useState(() => loadSessionId(storageKey, initialId));
++  const storageKey = `hackathon:session:map-coffee:${baseUrl}`;
++  const { sessionId, creating, error: sessionError, startNew } = useSessionId(storageKey);
 +  const [connectionError, setConnectionError] = useState("");
-+  const subako = useMemo(() => apiKey ? new SubakoClient({ baseUrl, apiKey }) : null, [baseUrl, apiKey]);
-+
-+  function changeSession(id: string) {
-+    saveSessionId(storageKey, id);
-+    setConnectionError("");
-+    setSessionId(id);
-+  }
++  // APIキーは持ちません。会話ごとのtokenを開発サーバーから受け取ります。
++  const subako = useMemo(
++    () => new SubakoSessionClient({ baseUrl, getToken: fetchSessionToken }),
++    [baseUrl],
++  );
  
    return (
 -    <div className="app-layout">
@@ -1039,12 +1053,19 @@ Mapの既定の出発地は画面にも表示している渋谷駅です。座�
 +              <button onClick={() => setConnectionError("")}>閉じる</button>
 +            </div>
 +          )}
-+          {subako && sessionId ? (
-+            <SubakoProvider client={subako.sessions} onError={() => setConnectionError("接続を確認してください。キー・session ID・Originの設定を確認し、アプリを再起動してください。") }>
-+              <MapAssistant key={sessionId} app={app} sessionId={sessionId} onSessionChange={changeSession} />
++          {sessionId ? (
++            <SubakoProvider client={subako} onError={() => setConnectionError("接続を確認してください。agentのOrigin設定と開発サーバーを確認し、アプリを再起動してください。") }>
++              <MapAssistant
++                key={sessionId}
++                app={app}
++                sessionId={sessionId}
++                creating={creating}
++                error={sessionError}
++                onNew={startNew}
++              />
 +            </SubakoProvider>
 +          ) : (
-+            <p className="session-notice">AIを使うには .env.local にAPIキーを設定し、<code>npm run agent:publish -- map-coffee</code> を実行してアプリを再起動してください。</p>
++            <SessionPending creating={creating} error={sessionError} onRetry={startNew} />
 +          )}
 +        </div>
 +      </aside>
@@ -1062,35 +1083,36 @@ Mapの既定の出発地は画面にも表示している渋谷駅です。座�
 ```diff
 --- apps/map/vite.config.ts
 +++ apps/map-coffee/vite.config.ts
-@@ -1,18 +1,23 @@
- import { fileURLToPath } from "node:url";
- import { defineConfig } from "vite";
- import react from "@vitejs/plugin-react";
-+import { newSessionPlugin } from "../../scripts/new-session.ts";
- 
-+const envDir = fileURLToPath(new URL("../../", import.meta.url));
+@@ -6,7 +6,7 @@ import { subakoDevApi } from "../../scripts/subako-dev-api.ts";
+ const envDir = fileURLToPath(new URL("../../", import.meta.url));
  const codespace = process.env.CODESPACE_NAME;
  const domain = process.env.GITHUB_CODESPACES_PORT_FORWARDING_DOMAIN;
 -const host = codespace && domain ? `${codespace}-5175.${domain}` : undefined;
 +const host = codespace && domain ? `${codespace}-5176.${domain}` : undefined;
  
- export default defineConfig({
--  plugins: [react()],
--  envDir: fileURLToPath(new URL("../../", import.meta.url)),
--  preview: { port: 5175, strictPort: true },
-+  plugins: [
-+    react(),
-+    newSessionPlugin({ port: 5176, envDir, allowedOrigin: host ? `https://${host}` : undefined }),
-+  ],
-+  envDir,
-+  preview: { port: 5176, strictPort: true },
-   server: {
-     host: "0.0.0.0",
--    port: 5175,
-+    port: 5176,
-     strictPort: true,
-     ...(host ? { allowedHosts: [host] } : {}),
-   },
+ export default defineConfig(({ mode }) => {
+   const env = loadEnv(mode, envDir, ["SUBAKO_", "VITE_SUBAKO_"]);
+@@ -16,16 +16,16 @@ export default defineConfig(({ mode }) => {
+       // APIキーを持つのは開発サーバーだけです。ブラウザーはこの口から会話に入ります。
+       subakoDevApi({
+         apiKey: env.SUBAKO_API_KEY ?? "",
+-        agentId: env.SUBAKO_AGENT_MAP ?? "",
++        agentId: env.SUBAKO_AGENT_MAP_COFFEE ?? "",
+         baseUrl: env.VITE_SUBAKO_BASE_URL || "https://api.us.cloud.subako.ai",
+-        title: "Map・スタート",
++        title: "渋谷コーヒー巡り",
+       }),
+     ],
+     envDir,
+-    preview: { port: 5175, strictPort: true },
++    preview: { port: 5176, strictPort: true },
+     server: {
+       host: "0.0.0.0",
+-      port: 5175,
++      port: 5176,
+       strictPort: true,
+       ...(host ? { allowedHosts: [host] } : {}),
+     },
 ```
 
 </details>
@@ -1141,11 +1163,10 @@ Mapの既定の出発地は画面にも表示している渋谷駅です。座�
 ```diff
 --- apps/map/src/domain.ts
 +++ apps/map-coffee/src/domain.ts
-@@ -27,6 +27,18 @@
- }
+@@ -28,6 +28,18 @@ export interface MapState {
  
  export const SHIBUYA_STATION = { lat: 35.658034, lng: 139.701636 };
-+
+ 
 +export interface WalkingRoute {
 +  fromId: string;
 +  toId: string;
@@ -1157,10 +1178,11 @@ Mapの既定の出発地は画面にも表示している渋谷駅です。座�
 +  sourceUrl: string;
 +  checkedAt: string;
 +}
- 
++
  function record(value: unknown, label: string): Record<string, unknown> {
    if (!value || typeof value !== "object" || Array.isArray(value))
-@@ -154,6 +166,7 @@
+     throw new Error(`${label}はオブジェクトにしてください。`);
+@@ -154,6 +166,7 @@ export function distanceKm(
  export function getVisitSummary(
    items: MapItem[],
    ids: string[],
@@ -1168,7 +1190,7 @@ Mapの既定の出発地は画面にも表示している渋谷駅です。座�
  ) {
    const locations = ids.flatMap(
      (id) => items.find((item) => item.id === id) ?? [],
-@@ -162,18 +175,35 @@
+@@ -162,18 +175,35 @@ export function getVisitSummary(
      const previous = locations[index - 1];
      const from = previous?.position ?? SHIBUYA_STATION;
      const straightLineKm = distanceKm(from, item.position);
@@ -1207,7 +1229,7 @@ Mapの既定の出発地は画面にも表示している渋谷駅です。座�
      };
    });
    return {
-@@ -182,6 +212,9 @@
+@@ -182,6 +212,9 @@ export function getVisitSummary(
        (sum, item) => sum + item.estimatedWalkMinutes,
        0,
      ),
@@ -1228,7 +1250,7 @@ Mapの既定の出発地は画面にも表示している渋谷駅です。座�
 ```diff
 --- apps/map/src/use-map-app.ts
 +++ apps/map-coffee/src/use-map-app.ts
-@@ -6,6 +6,7 @@
+@@ -6,6 +6,7 @@ import {
    updateVisitOrder,
    type MapItem,
    type MapState,
@@ -1236,7 +1258,7 @@ Mapの既定の出発地は画面にも表示している渋谷駅です。座�
  } from "./domain";
  
  const initialState = (items: MapItem[]): MapState => ({
-@@ -19,6 +20,7 @@
+@@ -19,6 +20,7 @@ const initialState = (items: MapItem[]): MapState => ({
  export function useMapApp(
    initialItems: MapItem[],
    storageKey: string,
@@ -1244,7 +1266,7 @@ Mapの既定の出発地は画面にも表示している渋谷駅です。座�
  ) {
    const [loaded] = useState(() => {
      try {
-@@ -65,10 +67,15 @@
+@@ -65,10 +67,15 @@ export function useMapApp(
      state,
      notice,
      setNotice,
@@ -1270,7 +1292,7 @@ Mapの既定の出発地は画面にも表示している渋谷駅です。座�
 ```diff
 --- apps/map/src/map-canvas.tsx
 +++ apps/map-coffee/src/map-canvas.tsx
-@@ -198,7 +198,7 @@
+@@ -198,7 +198,7 @@ export function MapCanvas({ app }: { app: MapApp }) {
                pathOptions={{
                  color: "#416753",
                  weight: 4,
@@ -1279,7 +1301,7 @@ Mapの既定の出発地は画面にも表示している渋谷駅です。座�
                }}
              />
            ))}
-@@ -212,7 +212,9 @@
+@@ -212,7 +212,9 @@ export function MapCanvas({ app }: { app: MapApp }) {
        {visitItems.length > 0 && (
          <div className="map-legend">
            <span />{" "}
@@ -1300,7 +1322,7 @@ Mapの既定の出発地は画面にも表示している渋谷駅です。座�
 ```diff
 --- apps/map/src/map-view.tsx
 +++ apps/map-coffee/src/map-view.tsx
-@@ -189,7 +189,10 @@
+@@ -189,7 +189,10 @@ export function MapView({
                            {item.name}
                          </button>
                          <small>
@@ -1312,7 +1334,7 @@ Mapの既定の出発地は画面にも表示している渋谷駅です。座�
                            {summary.segments[index]?.distanceKm.toFixed(2)}{" "}
                            km・移動 約
                            {summary.segments[index]?.estimatedWalkMinutes}分
-@@ -279,7 +282,7 @@
+@@ -279,7 +282,7 @@ export function MapView({
                target="_blank"
                rel="noreferrer"
              >
@@ -1331,7 +1353,7 @@ Mapの既定の出発地は画面にも表示している渋谷駅です。座�
 ```diff
 --- apps/map/src/domain.test.ts
 +++ apps/map-coffee/src/domain.test.ts
-@@ -14,7 +14,7 @@
+@@ -14,7 +14,7 @@ const row = {
    name: "最初の地点",
    position: { lat: 35.658034, lng: 139.701636 },
    tags: [],
@@ -1340,7 +1362,7 @@ Mapの既定の出発地は画面にも表示している渋谷駅です。座�
  };
  
  test("metadataを保持し、配列とitems形式の両方を読める", () => {
-@@ -70,6 +70,34 @@
+@@ -70,6 +70,34 @@ test("概算は直線距離に基づき、徒歩経路取得と区別する", ()
    );
    const result = getVisitSummary(parseMapItems([row]), ["first"]);
    assert.equal(result.segments[0]?.from, "渋谷駅");
@@ -1390,17 +1412,135 @@ Mapの既定の出発地は画面にも表示している渋谷駅です。座�
 
 ## 追加UI：会話のサイドバーと新しいセッション
 
-3つの完成例の `SessionControls.tsx` と `session.css` は同じ内容です。ファイルは各アプリにコピーしてあります。以下にはTODO版を代表として載せます。
+3つの完成例の `session.ts`・`SessionControls.tsx`・`session.css` は同じ内容です。ファイルは各アプリにコピーしてあります。以下にはTODO版を代表として載せます。
 
 | 追加部分 | 役割 | 最小の連携での扱い |
 | --- | --- | --- |
+| `session.ts` の `useSessionId` | 会話を作り、IDを `localStorage` に覚え、次回は続きから | **最小の連携から必要** |
+| `session.ts` の `fetchSessionToken` | 接続用のtokenを受け取る。`SubakoSessionClient` が期限切れのたびに呼ぶ | **最小の連携から必要** |
 | `session.css` | アプリと会話の表示領域を分ける | サイドバーを使うならコピーしてimportする |
-| `SessionControls` | 新しいセッションを作り、会話を切り替える | 後から追加できる |
-| `loadSessionId`・`saveSessionId` | 同じタブで選んだ会話を再開する | 会話切り替えと一緒に追加する |
+| `SessionControls` | 「新しいセッション」で会話を作り直す | 後から追加できる |
+| `SessionPending` | 会話ができるまでの表示と、失敗時の再試行 | 後から追加できる |
 | `SafeToolResult` | 短い操作表示・失敗状態・SDKの承認ボタンを表示 | 必要に応じて `SubakoChat` の `components` に渡す |
-| `newSessionPlugin` | Viteにセッション作成APIを追加する | 新しいセッションのボタンを使うときに追加する |
+| `subakoDevApi` | Viteに作成・token発行の口を足す | **6アプリすべてに配線済み** |
 
-`SessionControls` をコピーしたら、`App` に会話選択のstateを追加し、会話コンポーネントへ `sessionId`・`onSessionChange` を渡します。`key={sessionId}` により、切り替え時は会話の接続とツール登録を作り直します。TODOやカートなど、元のアプリのstateは親に残ります。接続部分まで含めたdiffは各題材の `App.tsx` にあります。
+`SessionControls` をコピーしたら、`useSessionId` が返す `creating`・`error`・`startNew` も会話コンポーネントへ渡します。`key={sessionId}` により、切り替え時は会話の接続とツール登録を作り直します。TODOやカートなど、元のアプリのstateは親に残ります。接続部分まで含めたdiffは各題材の `App.tsx` にあります。
+
+
+<details>
+<summary>追加ファイル：src/session.ts の全文</summary>
+
+```diff
+--- /dev/null
++++ apps/todo-integrated/src/session.ts
+@@ -0,0 +1,104 @@
++import { useCallback, useEffect, useRef, useState } from "react";
++
++/**
++ * 会話の出入り口。APIキーは開発サーバーだけが持つので、作成もtokenの発行も
++ * `/__subako/*` 越しに頼みます。ブラウザーが持つのは会話のIDだけです。
++ */
++
++export function loadSessionId(key: string) {
++  try {
++    return localStorage.getItem(key) || "";
++  } catch {
++    return "";
++  }
++}
++
++export function saveSessionId(key: string, id: string) {
++  try {
++    localStorage.setItem(key, id);
++  } catch {
++    // 保存できなくても、開いている間は会話を続けられます。
++  }
++}
++
++async function ask(path: string, body?: object) {
++  const response = await fetch(path, {
++    method: "POST",
++    headers: { "Content-Type": "application/json" },
++    signal: AbortSignal.timeout(30_000),
++    ...(body === undefined ? {} : { body: JSON.stringify(body) }),
++  });
++  if (!response.ok) throw new Error(`${path} が ${response.status} を返しました`);
++  return (await response.json()) as Record<string, unknown>;
++}
++
++/** 開発サーバーが決めたagentに、新しい会話を作ります。 */
++export async function createSession() {
++  const { sessionId } = await ask("/__subako/session");
++  if (typeof sessionId !== "string" || !sessionId)
++    throw new Error("会話のIDを受け取れませんでした");
++  return sessionId;
++}
++
++/** 会話につなぐためのtokenを発行します。期限切れのたびにSDKが呼び直します。 */
++export async function fetchSessionToken(sessionId: string) {
++  const { token } = await ask("/__subako/token", { sessionId });
++  if (typeof token !== "string" || !token)
++    throw new Error("tokenを受け取れませんでした");
++  return token;
++}
++
++/** 前回の会話があれば続け、なければ作って覚えます。 */
++export async function ensureSessionId(key: string) {
++  const saved = loadSessionId(key);
++  if (saved) return saved;
++  const created = await createSession();
++  saveSessionId(key, created);
++  return created;
++}
++
++/**
++ * 画面が使う会話のID。前回の続きがあれば最初の描画から渡し、なければ作ります。
++ * StrictModeで作成が二重に走らないよう、実行中は次の依頼を受けません。
++ */
++export function useSessionId(key: string) {
++  const [sessionId, setSessionId] = useState(() => loadSessionId(key));
++  const [creating, setCreating] = useState(() => !loadSessionId(key));
++  const [error, setError] = useState("");
++  const inFlight = useRef(false);
++
++  const run = useCallback(
++    (make: () => Promise<string>, message: string) => {
++      if (inFlight.current) return;
++      inFlight.current = true;
++      setCreating(true);
++      setError("");
++      make()
++        .then(setSessionId)
++        .catch(() => setError(message))
++        .finally(() => {
++          inFlight.current = false;
++          setCreating(false);
++        });
++    },
++    [],
++  );
++
++  useEffect(() => {
++    if (sessionId) return;
++    run(
++      () => ensureSessionId(key),
++      "会話を準備できませんでした。開発サーバーとAPIキーの設定を確認して、もう一度お試しください。",
++    );
++  }, [key, run, sessionId]);
++
++  const startNew = useCallback(() => {
++    run(async () => {
++      const created = await createSession();
++      saveSessionId(key, created);
++      return created;
++    }, "新しい会話を作れませんでした。開発サーバーとAPIキーの設定を確認して、もう一度お試しください。");
++  }, [key, run]);
++
++  return { sessionId, creating, error, startNew };
++}
+```
+
+</details>
 
 
 <details>
@@ -1409,66 +1549,25 @@ Mapの既定の出発地は画面にも表示している渋谷駅です。座�
 ```diff
 --- /dev/null
 +++ apps/todo-integrated/src/SessionControls.tsx
-@@ -0,0 +1,97 @@
-+import { useRef, useState, type ReactNode } from "react";
+@@ -0,0 +1,76 @@
++import type { ReactNode } from "react";
 +import type { SessionConnection } from "@subako-ai/sdk";
 +import type { ToolCallMessagePartProps } from "@assistant-ui/react";
 +import { SubakoToolApproval } from "@subako-ai/assistant-ui";
 +import { useSessionState } from "@subako-ai/react";
 +import "./session.css";
 +
-+export function loadSessionId(key: string, initialId: string) {
-+  try {
-+    return sessionStorage.getItem(key) || initialId;
-+  } catch {
-+    return initialId;
-+  }
-+}
-+
-+export function saveSessionId(key: string, id: string) {
-+  try {
-+    sessionStorage.setItem(key, id);
-+  } catch {
-+    // 保存できなくても、開いている間は会話を続けられます。
-+  }
-+}
-+
-+export function SessionControls({ session, onSessionChange, children }: {
++/** 会話の枠。状態は `useSessionId` が持ち、ここは表示と操作だけを担当します。 */
++export function SessionControls({ session, creating, error, onNew, children }: {
 +  session: SessionConnection | null;
-+  onSessionChange: (id: string) => void;
++  creating: boolean;
++  error: string;
++  onNew: () => void;
 +  children: ReactNode;
 +}) {
 +  const state = useSessionState(session);
-+  const [creating, setCreating] = useState(false);
-+  const [error, setError] = useState("");
-+  const inFlight = useRef(false);
 +  const running = state?.isRunning && state.status !== "failed";
 +  const connecting = !state || state.status === "connecting" || state.status === "reconnecting";
-+
-+  async function startNewSession() {
-+    if (inFlight.current) return;
-+    inFlight.current = true;
-+    setCreating(true);
-+    setError("");
-+    try {
-+      // 作成APIはCORS制約があるため、Viteを経由します。
-+      const response = await fetch("/__hackathon/session", {
-+        method: "POST",
-+        headers: { "X-Hackathon-Session": "new" },
-+        signal: AbortSignal.timeout(30_000),
-+      });
-+      const result = await response.json();
-+      if (!response.ok || typeof result?.sessionId !== "string" || !result.sessionId) {
-+        throw new Error("create failed");
-+      }
-+      onSessionChange(result.sessionId);
-+    } catch {
-+      setError("新しいセッションを作れませんでした。Viteの起動とAPIキーの設定・権限を確認して、もう一度お試しください。");
-+    } finally {
-+      inFlight.current = false;
-+      setCreating(false);
-+    }
-+  }
 +
 +  return (
 +    <div className="session-conversation" aria-busy={creating}>
@@ -1476,7 +1575,7 @@ Mapの既定の出発地は画面にも表示している渋谷駅です。座�
 +        <button
 +          type="button"
 +          disabled={creating || running || connecting}
-+          onClick={() => void startNewSession()}
++          onClick={onNew}
 +          title="会話を新しくします。アプリ内のデータは引き継がれます。"
 +        >
 +          <span aria-hidden="true">＋</span>
@@ -1486,6 +1585,26 @@ Mapの既定の出発地は画面にも表示している渋谷駅です。座�
 +        {error && <p className="session-error" role="alert">{error}</p>}
 +      </div>
 +      <div className="session-chat" inert={creating}>{children}</div>
++    </div>
++  );
++}
++
++/** 最初の会話ができるまでの表示。失敗しても、ここから作り直せます。 */
++export function SessionPending({ creating, error, onRetry }: {
++  creating: boolean;
++  error: string;
++  onRetry: () => void;
++}) {
++  return (
++    <div className="session-conversation" aria-busy={creating}>
++      <div className="session-toolbar">
++        {creating ? (
++          <span>会話を準備しています…</span>
++        ) : (
++          <button type="button" onClick={onRetry}>もう一度試す</button>
++        )}
++        {error && <p className="session-error" role="alert">{error}</p>}
++      </div>
 +    </div>
 +  );
 +}
@@ -1508,6 +1627,7 @@ Mapの既定の出発地は画面にも表示している渋谷駅です。座�
 +  );
 +}
 ```
+
 
 </details>
 
@@ -1607,14 +1727,19 @@ Mapの既定の出発地は画面にも表示している渋谷駅です。座�
 
 ### ボタンが呼ぶAPI
 
-`SessionControls` は `POST /__hackathon/session` を呼び、返された `sessionId` に切り替えます。[`scripts/new-session.ts`](../scripts/new-session.ts) はこのAPIを提供する運営用コードです。ブラウザーからのセッション作成にはCORSの制約があるため、Vite側で作成しています。普段の会話とclient toolはフロントエンドのSDKから接続します。
+APIキーを持つのは開発サーバーだけです。[`scripts/subako-dev-api.ts`](../scripts/subako-dev-api.ts) が2つの口を提供します。
 
-上記の `vite.config.ts` のdiffを適用するときも、**スターターのポートを維持します。** TODOなら `newSessionPlugin({ port: 5173, ... })` です。この教材のAPIは[`scripts/apps.mjs`](../scripts/apps.mjs)のポート対応表から、どの初期セッション・agentを使うか決めています。元のアプリのポートと、pluginに渡すポートをそろえます。
+| 口 | 呼ぶ人 | すること |
+| --- | --- | --- |
+| `POST /__subako/session` | `useSessionId`（初回）と「新しいセッション」 | 既定のagentに会話を作り、IDだけを返す |
+| `POST /__subako/token` | `SubakoSessionClient` の `getToken` | その会話に接続するtokenを発行する |
 
-[`scripts/new-session.ts`](../scripts/new-session.ts)・[`scripts/apps.mjs`](../scripts/apps.mjs) とルートのSDKはすでに用意されています。自分の別リポジトリに導入する場合は、同等のセッション作成APIを自分のサーバーに置きます。詳細な追加順序は[ワークシート](../README.md)の「任意：自分のTODOにも『新しいセッション』を追加する」を参照してください。
+どちらもブラウザーから直接呼べません。作成APIはCORSが許可されていないためです。一方、会話への接続とclient toolは、発行されたtokenでAPIへ直接つなぎます。こちらはagentの `allowed_origins` でOriginごとに許可されています。
+
+`vite.config.ts` は6アプリすべてに配線済みなので、追加の設定は要りません。自分の別リポジトリに導入する場合は、同じ2つの口を自分のサーバーに置きます。詳細な追加順序は[ワークシート](../README.md)の「任意：自分のTODOにも『新しいセッション』を追加する」を参照してください。
 
 - [ ] 新しいセッションで会話が空になり、アプリのデータは残った。
-- [ ] 同じタブをリロードすると、選び直した会話を再開できた。
+- [ ] リロードしても、タブを閉じて開き直しても、同じ会話を再開できた。
 - [ ] EC・Mapでは、ダイアログを開いたままサイドバーでも会話できた。
 
 ## 手元のコードでdiffを取り直す

@@ -1,62 +1,21 @@
-import { useRef, useState, type ReactNode } from "react";
+import type { ReactNode } from "react";
 import type { SessionConnection } from "@subako-ai/sdk";
 import type { ToolCallMessagePartProps } from "@assistant-ui/react";
 import { SubakoToolApproval } from "@subako-ai/assistant-ui";
 import { useSessionState } from "@subako-ai/react";
 import "./session.css";
 
-export function loadSessionId(key: string, initialId: string) {
-  try {
-    return sessionStorage.getItem(key) || initialId;
-  } catch {
-    return initialId;
-  }
-}
-
-export function saveSessionId(key: string, id: string) {
-  try {
-    sessionStorage.setItem(key, id);
-  } catch {
-    // 保存できなくても、開いている間は会話を続けられます。
-  }
-}
-
-export function SessionControls({ session, onSessionChange, children }: {
+/** 会話の枠。状態は `useSessionId` が持ち、ここは表示と操作だけを担当します。 */
+export function SessionControls({ session, creating, error, onNew, children }: {
   session: SessionConnection | null;
-  onSessionChange: (id: string) => void;
+  creating: boolean;
+  error: string;
+  onNew: () => void;
   children: ReactNode;
 }) {
   const state = useSessionState(session);
-  const [creating, setCreating] = useState(false);
-  const [error, setError] = useState("");
-  const inFlight = useRef(false);
   const running = state?.isRunning && state.status !== "failed";
   const connecting = !state || state.status === "connecting" || state.status === "reconnecting";
-
-  async function startNewSession() {
-    if (inFlight.current) return;
-    inFlight.current = true;
-    setCreating(true);
-    setError("");
-    try {
-      // 作成APIはCORS制約があるため、Viteを経由します。
-      const response = await fetch("/__hackathon/session", {
-        method: "POST",
-        headers: { "X-Hackathon-Session": "new" },
-        signal: AbortSignal.timeout(30_000),
-      });
-      const result = await response.json();
-      if (!response.ok || typeof result?.sessionId !== "string" || !result.sessionId) {
-        throw new Error("create failed");
-      }
-      onSessionChange(result.sessionId);
-    } catch {
-      setError("新しいセッションを作れませんでした。Viteの起動とAPIキーの設定・権限を確認して、もう一度お試しください。");
-    } finally {
-      inFlight.current = false;
-      setCreating(false);
-    }
-  }
 
   return (
     <div className="session-conversation" aria-busy={creating}>
@@ -64,7 +23,7 @@ export function SessionControls({ session, onSessionChange, children }: {
         <button
           type="button"
           disabled={creating || running || connecting}
-          onClick={() => void startNewSession()}
+          onClick={onNew}
           title="会話を新しくします。アプリ内のデータは引き継がれます。"
         >
           <span aria-hidden="true">＋</span>
@@ -74,6 +33,26 @@ export function SessionControls({ session, onSessionChange, children }: {
         {error && <p className="session-error" role="alert">{error}</p>}
       </div>
       <div className="session-chat" inert={creating}>{children}</div>
+    </div>
+  );
+}
+
+/** 最初の会話ができるまでの表示。失敗しても、ここから作り直せます。 */
+export function SessionPending({ creating, error, onRetry }: {
+  creating: boolean;
+  error: string;
+  onRetry: () => void;
+}) {
+  return (
+    <div className="session-conversation" aria-busy={creating}>
+      <div className="session-toolbar">
+        {creating ? (
+          <span>会話を準備しています…</span>
+        ) : (
+          <button type="button" onClick={onRetry}>もう一度試す</button>
+        )}
+        {error && <p className="session-error" role="alert">{error}</p>}
+      </div>
     </div>
   );
 }

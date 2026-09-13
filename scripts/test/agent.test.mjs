@@ -20,11 +20,11 @@ test("Codespacesのアプリ別Originを生成し、パス付きOriginは拒否�
 });
 test("ID更新でキーや他アプリの設定を保持する", () => {
   const source =
-    "# settings\nVITE_SUBAKO_API_KEY=demo-secret\nVITE_SUBAKO_SESSION_EC=old\n";
-  const changed = replaceEnvValue(source, "VITE_SUBAKO_SESSION_EC", "new");
-  assert.ok(changed.includes("VITE_SUBAKO_API_KEY=demo-secret"));
-  assert.ok(changed.includes("VITE_SUBAKO_SESSION_EC=new"));
-  assert.equal(changed.match(/VITE_SUBAKO_SESSION_EC=/g).length, 1);
+    "# settings\nSUBAKO_API_KEY=demo-secret\nSUBAKO_AGENT_EC=old\n";
+  const changed = replaceEnvValue(source, "SUBAKO_AGENT_EC", "new");
+  assert.ok(changed.includes("SUBAKO_API_KEY=demo-secret"));
+  assert.ok(changed.includes("SUBAKO_AGENT_EC=new"));
+  assert.equal(changed.match(/SUBAKO_AGENT_EC=/g).length, 1);
   assert.throws(() => replaceEnvValue(source, "X", "x\nY=z"));
 });
 test("providerに存在しないモデルと形式違いを拒否する", () => {

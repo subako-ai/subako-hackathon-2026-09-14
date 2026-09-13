@@ -98,13 +98,15 @@ npm run setup
 作成された **ルートの `.env.local`** を開き、値を入れます。
 
 ```dotenv
-VITE_SUBAKO_API_KEY=発行した教材用キー
+SUBAKO_API_KEY=発行した教材用キー
 VITE_SUBAKO_BASE_URL=https://api.us.cloud.subako.ai
 SUBAKO_MODEL_PROVIDER_ID=一覧から運営指定のprovider ID
 SUBAKO_MODEL_ID=そのproviderにあるモデルID
 SUBAKO_MODEL_FORMAT=
 SUBAKO_MODEL_CONTEXT_WINDOW=128000
 ```
+
+`SUBAKO_API_KEY` に `VITE_` が付かないのは、**このキーを開発サーバーだけが使う**からです。ブラウザーへ渡るのは `VITE_` で始まる変数だけなので、キーは画面に出ません。
 
 `SUBAKO_MODEL_FORMAT` は空のままでproviderの形式を使います。context windowの128000はCLIの設定例と同じ初期値で、運営指定があれば変更してください。一覧は `npm run agent:models` でも確認できます。
 
@@ -144,40 +146,46 @@ npm install --workspace @hackathon/todo @subako-ai/sdk@0.1.1 @subako-ai/react@0.
 npm run agent:publish -- todo
 ```
 
-スクリプトがagentの作成・publish・Originの許可・新規session作成を行い、`.env.local` の `VITE_SUBAKO_SESSION_TODO` を更新します。起動中のアプリを `Ctrl+C` で止め、同じ起動コマンドで再起動してください。
+スクリプトがagentの作成・publish・Originの許可を行い、`.env.local` の `SUBAKO_AGENT_TODO` を更新します。会話（session）はここでは作りません。アプリが必要になったときに自分で作ります。起動中のアプリを `Ctrl+C` で止め、同じ起動コマンドで再起動してください。
 
 ### 既存の関数を、エージェントから呼べるようにする
 
-会話の見た目を整えるCSSを、完成例からコピーします。ルートで実行してください。
+会話の出入り口と、見た目を整えるCSSを完成例からコピーします。ルートで実行してください。
 
 ```sh
+cp apps/todo-integrated/src/session.ts apps/todo/src/session.ts
 cp apps/todo-integrated/src/session.css apps/todo/src/session.css
 ```
+
+[`session.ts`](apps/todo-integrated/src/session.ts) は会話を作り、そのIDを `localStorage` に覚え、接続用のtokenを受け取る部分です。APIキーはブラウザーに無いので、どれも開発サーバーの `/__subako/*` に頼みます。
 
 `App.tsx` にSDKとCSSのimport、クライアントを追加します。
 
 ```tsx
 import { z } from 'zod';
-import { SubakoClient } from '@subako-ai/sdk';
+import { SubakoSessionClient } from '@subako-ai/sdk';
 import { SubakoProvider, useSession, useTool, useToolClient } from '@subako-ai/react';
 import { SubakoChat } from '@subako-ai/assistant-ui';
+import { fetchSessionToken, useSessionId } from './session';
 import './session.css';
 
-const subako = new SubakoClient({
-  baseUrl: import.meta.env.VITE_SUBAKO_BASE_URL,
-  apiKey: import.meta.env.VITE_SUBAKO_API_KEY,
-});
+const baseUrl = import.meta.env.VITE_SUBAKO_BASE_URL || 'https://api.us.cloud.subako.ai';
+const sessionStorageKey = `hackathon:session:todo:${baseUrl}`;
+
+// APIキーは持ちません。会話ごとのtokenを開発サーバーから受け取ります。
+const subako = new SubakoSessionClient({ baseUrl, getToken: fetchSessionToken });
 ```
 
 同じファイルに、会話を担当する `TodoAssistant` を追加します。`Todo` は既存の `./model` からimportします。
 
 ```tsx
-function TodoAssistant({ getItems, add, complete }: {
+function TodoAssistant({ getItems, add, complete, sessionId }: {
   getItems: () => Todo[];
   add: (title: string) => Todo;
   complete: (id: string, done: boolean) => Todo;
+  sessionId: string;
 }) {
-  const session = useSession(import.meta.env.VITE_SUBAKO_SESSION_TODO);
+  const session = useSession(sessionId);
   const client = useToolClient(session, 'todo');
 
   useTool(client, 'list_todos', {
@@ -201,6 +209,12 @@ function TodoAssistant({ getItems, add, complete }: {
 
 `schema` にZodスキーマを渡すと、SDKがAIへ伝える引数の形を生成し、実行前に値を検証します。`execute` の引数の型もスキーマから推論されます。`.strict()` は未定義の引数を拒否する指定です。
 
+`App` の本体に、使う会話のIDを1行足します。保存済みの会話があれば続き、無ければ新しく作ります。
+
+```tsx
+const { sessionId } = useSessionId(sessionStorageKey);
+```
+
 `App` の `return` で、外側の `app-layout` に `has-session` を追加し、既存の `app-panel` の直後にサイドバーを置きます。既存のTODOの画面はそのまま残します。`getItems`・`add`・`complete` には、`App` 内ですでに使っている関数を渡します。`getItems()` は追加・完了・削除の処理で、現在の一覧を読むために使っている関数です。
 
 ```tsx
@@ -213,9 +227,13 @@ function TodoAssistant({ getItems, add, complete }: {
   <aside className="session-sidebar" aria-label="TODOアシスタント">
     <header><h2>TODOアシスタント</h2></header>
     <div className="session-content">
-      <SubakoProvider client={subako.sessions}>
-        <TodoAssistant getItems={getItems} add={add} complete={complete} />
-      </SubakoProvider>
+      {sessionId ? (
+        <SubakoProvider client={subako}>
+          <TodoAssistant getItems={getItems} add={add} complete={complete} sessionId={sessionId} />
+        </SubakoProvider>
+      ) : (
+        <p>会話を準備しています…</p>
+      )}
     </div>
   </aside>
 </div>
@@ -238,15 +256,17 @@ useTool(client, 'set_todo_done', {
 - [ ] 「サンプルを起動する、は完了した」で該当するTODOが完了した。
 - [ ] 別のTODOを手で完了にしてから「残りを教えて」と聞くと、その変更が反映された。
 
-完成例は [`apps/todo-integrated/src/App.tsx`](apps/todo-integrated/src/App.tsx) です。TODOの画面・状態・操作関数を残したまま、SDKの初期化、ツールの登録、会話の表示を追加しています。キー未設定の案内や「新しいセッション」ボタンも含めて比較できます。完成例を動かす場合は、`npm run agent:publish -- todo-integrated` と `npm run dev -- todo-integrated` を使います。
+完成例は [`apps/todo-integrated/src/App.tsx`](apps/todo-integrated/src/App.tsx) です。TODOの画面・状態・操作関数を残したまま、SDKの初期化、ツールの登録、会話の表示を追加しています。接続エラーの表示や「新しいセッション」ボタンも含めて比較できます。完成例を動かす場合は、`npm run agent:publish -- todo-integrated` と `npm run dev -- todo-integrated` を使います。
 
-ここまでが最小の導入です。完成例にあるキー未設定の案内、接続エラー表示、ツール結果の表示調整、新しいセッションのボタンは追加のUIです。後から必要なものを足せます。セッション切り替えの追加手順は「5. 試し直す・録画する」にあります。
+ここまでが最小の導入です。完成例にある接続エラー表示、ツール結果の表示調整、新しいセッションのボタンは追加のUIです。後から必要なものを足せます。セッション切り替えの追加手順は「5. 試し直す・録画する」にあります。
 
 ### 会話を試し直す
 
 会話履歴はSubakoに保存され、リロードでは同じセッションを再開します。完成例の「新しいセッション」を押すと、空の会話に切り替わります。TODO・カート・訪問リストは引き継がれ、以前の会話もサーバーからは削除しません。応答中は、応答が終わるかチャットの停止ボタンを押してから切り替えます。
 
-完成例ではセッション選択の処理を各アプリの `src/SessionControls.tsx` に置いています。選んだセッションIDはタブ内の `sessionStorage` に保存するので、同じタブでリロードしても新しい会話を再開できます。タブを閉じた場合や、publishで `.env.local` のIDを更新した場合は、その設定のセッションから始まります。ハンズオン中は `npm run session:new -- todo` と開発サーバーの再起動でも会話を作り直せます。
+完成例では会話の出入り口を各アプリの `src/session.ts`、表示と操作を `src/SessionControls.tsx` に置いています。会話のIDはブラウザーの `localStorage` に保存するので、リロードしてもタブを閉じても同じ会話を再開します。
+
+会話は作られた時点のagentのversionに結び付きます。`prompt.md` を直して publish し直したら、**「新しいセッション」を押して会話を作り直してください**。押すまでは前の指示のまま続きます。
 
 複数の完成例を準備するときは、すべてのpublishを済ませてから会話を始めてください。共通の `.env.local` を更新すると、起動中の他アプリも再読み込みされます。同じsessionを複数タブで開くと各タブのツールが登録されるため、操作するタブはアプリごとに1つにしましょう。
 
@@ -311,13 +331,15 @@ Map・ECのスターターの `App.tsx` を開き、手動の検索・選択・�
 
 1. SDKのimport・クライアント・会話用コンポーネントを追加します。Mapでは `app`、ECでは `catalog` をpropsで渡します。型はそれぞれ既存ファイルから `MapApp` / `CatalogStore` をimportできます。
 2. 下の `getState()` を追加してから、完成例から必要な `useTool` の定義を選び、`execute` が今のアプリの値・関数を使うようにします。説明文も自分の題材に合わせます。
-3. `session.css` だけを対応する完成例からコピーし、importします。TODOと同じサイドバーと `SubakoProvider` を追加し、最初は `return <SubakoChat session={session} />` で表示します。EC・Mapにあるダイアログの表示先（`app-dialogs`）は、アプリ側に残します。`SessionControls`・セッション保存処理は、この段階では不要です。
+3. `session.ts` と `session.css` を対応する完成例からコピーし、importします。TODOと同じサイドバーと `SubakoProvider` を追加し、最初は `return <SubakoChat session={session} />` で表示します。EC・Mapにあるダイアログの表示先（`app-dialogs`）は、アプリ側に残します。`SessionControls`（「新しいセッション」ボタン）は、この段階では不要です。
 4. `agents/map/prompt.md` または `agents/ec/prompt.md` を自分の利用者・業界・任せたい操作に合わせて編集してから、対象アプリをpublishします。
 
-| アプリ | 最初に読むツール | 最初に画面を変えるツール | `useSession` に渡す環境変数 |
-| --- | --- | --- | --- |
-| Map | `get_places` → `app.getState().items`を読む | `show_candidates` → `app.showCandidates(ids)` | `VITE_SUBAKO_SESSION_MAP` |
-| EC | `search_items` → 既存の `searchCatalog(catalog.getState().data.items, query, maxPrice)` | `show_items` → `catalog.showItems(ids)` | `VITE_SUBAKO_SESSION_EC` |
+| アプリ | 最初に読むツール | 最初に画面を変えるツール |
+| --- | --- | --- |
+| Map | `get_places` → `app.getState().items`を読む | `show_candidates` → `app.showCandidates(ids)` |
+| EC | `search_items` → 既存の `searchCatalog(catalog.getState().data.items, query, maxPrice)` | `show_items` → `catalog.showItems(ids)` |
+
+`useSession` に渡すIDは、TODOと同じく `useSessionId` から受け取ります。保存キーのアプリ名だけ `map` / `ec` に変えてください。
 
 ツールは画面の再描画を待たずに続けて呼ばれることがあるため、読み取りには現在値を返す `getState()` を追加します。Mapの [`use-map-app.ts`](apps/map/src/use-map-app.ts) の `const app = { ... }`、ECの [`useCatalog.ts`](apps/ec/src/useCatalog.ts) の最後の `return { ... }` に、それぞれ次のメソッドを加えてください。既存のrefは操作のたびに更新されています。画面は引き続き `state` を使います。
 
@@ -340,7 +362,7 @@ npm run agent:publish -- map
 npm run dev -- map
 ```
 
-`--workspace @hackathon/map` は、SDKをインストールするアプリの指定です。起動中なら先に止め、再起動してください。publishスクリプトがアプリ別のagentとsessionを準備します。
+`--workspace @hackathon/map` は、SDKをインストールするアプリの指定です。起動中なら先に止め、再起動してください。publishスクリプトがアプリ別のagentを準備します。会話はアプリが作ります。
 
 - [ ] 自分のデータを検索し、候補がカード・地図に表示された。
 - [ ] この流れを30秒で見せられる。ここで最初の完成！
@@ -362,11 +384,14 @@ MCPを使うなら、[`presets/mcp/exa.json`](presets/mcp/exa.json)（Web検索�
 | やりたいこと | 操作 |
 | --- | --- |
 | 指示・MCPを反映 | `npm run agent:publish -- map-coffee` → 開発サーバーを再起動 |
-| 会話を新しくする | 完成例のサイドバーで「新しいセッション」。コマンドで行う場合は `npm run session:new -- map-coffee` → 開発サーバーを再起動 |
-| 設定後も接続できない | キーの期限・残高・session ID・Originを確認。運営に相談 |
+| 会話を新しくする | サイドバーの「新しいセッション」。開発サーバーの再起動は要りません |
+| Originだけ許可し直す | `npm run agent:origins -- map-coffee`（Codespacesの URL が変わったときなど） |
+| 設定後も接続できない | キーの期限・残高・Originを確認。運営に相談 |
 | 再読み込み直後にツールだけ失敗した | 古い接続が約60秒残る場合があります。1分ほど置いて現在の状態を読み直すよう依頼するか、「新しいセッション」で会話を作り直します。追加・購入などの操作を再送する前に画面の結果を確認してください |
 
-APIのCORS設定上、publishはNodeスクリプト、新規session作成ボタンはViteの専用ルートを経由します。ボタンでの作成は `.env.local` を書き換えないため、他のアプリはリロードされません。会話とclient toolはフロントからAPIキーで接続します。起動する常駐プロセスはViteだけで、Codespacesでも同じ構成です。ボタンは `vite preview` でも使えますが、ビルドしたファイルを静的ホスティングする場合は同等のセッション作成APIが必要です。
+APIキーを持つのは開発サーバーだけです。会話の作成とtokenの発行はブラウザーから直接呼べない（CORSが許可されていない）ので、Viteの `/__subako/session` と `/__subako/token` を経由します。ブラウザーが持つのは会話のIDと、その会話だけに使えるtokenです。会話への接続とclient toolは、そのtokenでAPIへ直接つなぎます。こちらはagentの `allowed_origins` でOriginごとに許可されています。
+
+起動する常駐プロセスはViteだけで、Codespacesでも同じ構成です。`vite preview` でも同じ2つの口が使えますが、ビルドしたファイルを静的ホスティングする場合は同等の口を自分のサーバーに用意してください。
 
 ビルドした状態を確認する場合は、開発サーバーを `Ctrl+C` で止めてから次を実行します。`preview` も同じアプリのポート（この例では5174）を使います。`.env.local` を変更した場合は再ビルドしてください。
 
@@ -378,43 +403,35 @@ npm exec --workspace @hackathon/todo-integrated -- vite preview
 <details>
 <summary>任意：自分のTODOにも「新しいセッション」を追加する</summary>
 
-最小の導入を終えた `todo` への追加手順です。会話の選択だけを変え、TODOの状態には触れません。
+最小の導入を終えた `todo` への追加手順です。会話の作成はすでに動いているので、足すのは「作り直すボタン」だけです。TODOの状態には触れません。
 
-**1. UIをコピーし、App.tsxにimportします。** `session.css` はハンズオンでコピー済みです。
+**1. UIをコピーします。** `session.ts` と `session.css` はハンズオンでコピー済みです。
 
 ```sh
 cp apps/todo-integrated/src/SessionControls.tsx apps/todo/src/SessionControls.tsx
 ```
 
 ```tsx
-import { loadSessionId, saveSessionId, SessionControls, SafeToolResult } from './SessionControls';
-
-const baseUrl = import.meta.env.VITE_SUBAKO_BASE_URL || 'https://api.us.cloud.subako.ai';
-const initialSessionId = import.meta.env.VITE_SUBAKO_SESSION_TODO?.trim() || '';
-const sessionStorageKey = `hackathon:session:todo:${baseUrl}:${initialSessionId}`;
+import { SessionControls, SessionPending, SafeToolResult } from './SessionControls';
 ```
 
-上の定数は既存の `new SubakoClient` より前に置き、そのクライアントにもこの `baseUrl` を渡します。APIキーの渡し方は変えません。
-
-**2. Appの中に会話選択のstateを追加します。** `useState` は既存のReact importにあります。
+**2. `useSessionId` から、残りの3つも受け取ります。** ハンズオンでは `sessionId` だけ使っていました。
 
 ```tsx
-const [sessionId, setSessionId] = useState(() => loadSessionId(sessionStorageKey, initialSessionId));
-function changeSession(id: string) {
-  saveSessionId(sessionStorageKey, id);
-  setSessionId(id);
-}
+const { sessionId, creating, error: sessionError, startNew } = useSessionId(sessionStorageKey);
 ```
 
 **3. TodoAssistantの引数と会話の表示を変更します。** 既存の3つの `useTool` はそのまま残します。
 
 ```tsx
-function TodoAssistant({ getItems, add, complete, sessionId, onSessionChange }: {
+function TodoAssistant({ getItems, add, complete, sessionId, creating, error, onNew }: {
   getItems: () => Todo[];
   add: (title: string) => Todo;
   complete: (id: string, done: boolean) => Todo;
   sessionId: string;
-  onSessionChange: (id: string) => void;
+  creating: boolean;
+  error: string;
+  onNew: () => void;
 }) {
   const session = useSession(sessionId);
   const client = useToolClient(session, 'todo');
@@ -422,7 +439,7 @@ function TodoAssistant({ getItems, add, complete, sessionId, onSessionChange }: 
   // ここに既存の3つのuseToolを残します。
 
   return (
-    <SessionControls session={session} onSessionChange={onSessionChange}>
+    <SessionControls session={session} creating={creating} error={error} onNew={onNew}>
       <SubakoChat session={session} components={{ tools: { Fallback: SafeToolResult } }} />
     </SessionControls>
   );
@@ -431,46 +448,41 @@ function TodoAssistant({ getItems, add, complete, sessionId, onSessionChange }: 
 
 `SafeToolResult` は生のツール結果を短い操作表示に替え、失敗・承認待ちも表示する追加UIです。承認が必要なツールのボタンはSDKの `SubakoToolApproval` で表示します。この表示調整を使わない場合は、`components` とそのimportを省略できます。
 
-**4. Appのサイドバー内の呼び出しに、会話IDと切り替え関数を渡します。** 既存の `SubakoProvider` の中を変更します。
+**4. サイドバーの呼び出しに、増えた値を渡します。** ハンズオンで書いた「会話を準備しています…」も、失敗したときに作り直せる `SessionPending` に替えます。
 
 ```tsx
-<TodoAssistant
-  key={sessionId}
-  getItems={getItems}
-  add={add}
-  complete={complete}
-  sessionId={sessionId}
-  onSessionChange={changeSession}
-/>
+{sessionId ? (
+  <SubakoProvider client={subako}>
+    <TodoAssistant
+      key={sessionId}
+      getItems={getItems}
+      add={add}
+      complete={complete}
+      sessionId={sessionId}
+      creating={creating}
+      error={sessionError}
+      onNew={startNew}
+    />
+  </SubakoProvider>
+) : (
+  <SessionPending creating={creating} error={sessionError} onRetry={startNew} />
+)}
 ```
 
-**5. apps/todo/vite.config.tsに作成APIを追加して、Viteを再起動します。** importを足し、既存の `plugins` を次の値に変更します。`fileURLToPath` のimportと `host` は各アプリの同ファイルに定義済みです。
+`vite.config.ts` は触りません。会話を作る口は最初から6アプリすべてに入っています。
 
-```ts
-import { newSessionPlugin } from '../../scripts/new-session.ts';
+Map・ECへ追加する場合も同じ手順です。会話コンポーネントには既存の `app` / `catalog` を渡し続けます。コピー元と保存キーのアプリ名だけ、次の組み合わせにします。
 
-// defineConfig内のpluginsを置き換えます。
-plugins: [react(), newSessionPlugin({
-  port: 5173,
-  envDir: fileURLToPath(new URL('../../', import.meta.url)),
-  allowedOrigin: host ? `https://${host}` : undefined,
-})],
-```
+| 編集アプリ | SessionControlsのコピー元 | 保存キー / publishの引数 |
+| --- | --- | --- |
+| `todo` | `todo-integrated` | `hackathon:session:todo:${baseUrl}` / `todo` |
+| `map` | `map-coffee` | `hackathon:session:map:${baseUrl}` / `map` |
+| `ec` | `ec-coffee` | `hackathon:session:ec:${baseUrl}` / `ec` |
 
-`envDir` はルートの `.env.local` があるディレクトリを指します。Map・ECも上の式を使えます。`server.port` と `preview.port` は **5173のまま** にします。`newSessionPlugin` はポートから対象アプリを選ぶため、完成例の5174をコピーすると別アプリの設定になります。初期セッションは `npm run agent:publish -- todo` で用意しておきます。
-
-Map・ECへ追加する場合も同じ手順で、会話コンポーネントには既存の `app` / `catalog` を渡し続けます。コピー元、初期sessionの変数、会話保存キー内のアプリ名、ポートを次の組み合わせにします。
-
-| 編集アプリ | SessionControlsのコピー元 | 初期sessionの環境変数 | ポート / publishの引数 |
-| --- | --- | --- | --- |
-| `todo` | `todo-integrated` | `VITE_SUBAKO_SESSION_TODO` | 5173 / `todo` |
-| `map` | `map-coffee` | `VITE_SUBAKO_SESSION_MAP` | 5175 / `map` |
-| `ec` | `ec-coffee` | `VITE_SUBAKO_SESSION_EC` | 5177 / `ec` |
-
-ルートの [`scripts/new-session.ts`](scripts/new-session.ts) は運営が用意したsession作成API、[`scripts/apps.mjs`](scripts/apps.mjs) はこの教材のポートと設定名の対応表です。ルートのSDKを使ってVite上で動き、未連携アプリには追加されていません。自分の別リポジトリへ持ち出す場合は、自分のサーバーに同等のsession作成APIを用意してボタンから呼びます。元のアプリの状態管理を変更する必要はありません。
+ルートの [`scripts/subako-dev-api.ts`](scripts/subako-dev-api.ts) が、APIキーを持つ2つの口（`/__subako/session` と `/__subako/token`）です。各アプリの `vite.config.ts` が、キー・agent・接続先・表示名を渡して呼び出しています。自分の別リポジトリへ持ち出す場合は、同じ2つの口を自分のサーバーに用意してください。元のアプリの状態管理を変更する必要はありません。
 
 - [ ] ボタンで空の会話になり、アプリのデータは残った。
-- [ ] 同じタブをリロードしても、新しく選んだ会話を再開した。
+- [ ] リロードしても、タブを閉じて開き直しても、同じ会話を再開した。
 
 </details>
 
