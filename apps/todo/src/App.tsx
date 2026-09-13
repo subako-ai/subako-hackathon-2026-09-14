@@ -5,8 +5,8 @@ import "./style.css";
 import "./layout.css";
 
 // ──────────────────────────────────────────────────────────────
-// TODO ① SDKと、コピーしてきた session.ts・CSS をimportする
-//    先に npm install と cp を済ませておきます。
+// TODO ① SDKと、同じフォルダの session.ts・session.css をimportする
+//    session.ts と session.css は最初から置いてあります。npm install だけ先に。
 // ──────────────────────────────────────────────────────────────
 // import { z } from "zod";
 // import { SubakoSessionClient } from "@subako-ai/sdk";

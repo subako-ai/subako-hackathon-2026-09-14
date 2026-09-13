@@ -1,9 +1,13 @@
-import { useCallback, useEffect, useRef, useState } from "react";
-
 /**
- * 会話の出入り口。APIキーは開発サーバーだけが持つので、作成もtokenの発行も
- * `/__subako/*` 越しに頼みます。ブラウザーが持つのは会話のIDだけです。
+ * 会話（session）の出入り口。App.tsx の TODO ① でimportして使います。
+ *
+ * APIキーはブラウザーに置きません。会話の作成もtokenの発行も、開発サーバーの
+ * `/__subako/*` に頼みます。ブラウザーが持つのは会話のIDだけで、それを
+ * localStorage に覚えて、次に開いたときは同じ会話から続けます。
+ *
+ * 中身を読まなくてもハンズオンは進みます。完成例と同じ内容です。
  */
+import { useCallback, useEffect, useRef, useState } from "react";
 
 export function loadSessionId(key: string) {
   try {

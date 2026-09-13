@@ -1,3 +1,7 @@
+/**
+ * 会話のサイドバーと吹き出しのCSS。App.tsx の TODO ① でimportします。
+ * 中身を読まなくてもハンズオンは進みます。完成例と同じ内容です。
+ */
 .app-layout.has-session { grid-template-columns: minmax(0, 1fr) 360px; }
 .session-sidebar {
   min-width: 0;

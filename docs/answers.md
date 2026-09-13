@@ -71,8 +71,7 @@ APIキーはルートの `.env.local` の `SUBAKO_API_KEY` に置きます。`VI
 | --- | --- |
 | `package.json` | SDK・assistant-ui・Zodの追加。`name` の差分は完成例を別アプリとして起動するため |
 | `src/App.tsx` | 接続、3つのツール、サイドバー、会話選択のstateを追加 |
-| `src/session.css`（追加） | サイドバーと会話の見た目 |
-| `src/session.ts`（追加） | 会話の作成・localStorage・tokenの受け取り。全文は[追加UIの差分](#session-answer) |
+| `src/session.css`・`src/session.ts` | スターターにも最初から置いてあります。importして使うだけです |
 | `src/SessionControls.tsx`（追加） | 新しいセッションとツール結果の表示。全文は[追加UIの差分](#session-answer) |
 | `vite.config.ts` | 新しいセッションを作るAPIを追加。最小のチャット連携では変更不要 |
 
@@ -269,7 +268,7 @@ APIキーはルートの `.env.local` の `SUBAKO_API_KEY` に置きます。`VI
 </details>
 
 
-最初は `SessionControls` を使わず、`return <SubakoChat session={session} />` だけでも会話できます。その場合は `session.css` を `App.tsx` で直接importします。`session.ts` は会話を作るのに必要なので、最小の連携でもコピーします。完成例では `SessionControls.tsx` がこのCSSをimportしています。3つのツールを残したまま、後から会話の切り替えを追加できます。
+最初は `SessionControls` を使わず、`return <SubakoChat session={session} />` だけでも会話できます。その場合は `session.css` を `App.tsx` で直接importします。`session.ts` は会話を作るのに必要なので、最小の連携でも使います。完成例では `SessionControls.tsx` がこのCSSをimportしています。3つのツールを残したまま、後から会話の切り替えを追加できます。
 
 - [ ] 手でTODOを1件追加し、AIに現在の一覧を読んでもらえた。
 - [ ] AIで追加したTODOを手で完了にし、その変更をAIの回答に反映できた。
@@ -1410,13 +1409,13 @@ Mapの既定の出発地は画面にも表示している渋谷駅です。座�
 
 ## 追加UI：会話のサイドバーと新しいセッション
 
-3つの完成例の `session.ts`・`SessionControls.tsx`・`session.css` は同じ内容です。ファイルは各アプリにコピーしてあります。以下にはTODO版を代表として載せます。
+`session.ts`・`SessionControls.tsx`・`session.css` は完成例3つで同じ内容です。うち `session.ts` と `session.css` は、スターターの `apps/todo` にも最初から置いてあります。以下にはTODO版を代表として載せます。
 
 | 追加部分 | 役割 | 最小の連携での扱い |
 | --- | --- | --- |
 | `session.ts` の `useSessionId` | 会話を作り、IDを `localStorage` に覚え、次回は続きから | **最小の連携から必要** |
 | `session.ts` の `fetchSessionToken` | 接続用のtokenを受け取る。`SubakoSessionClient` が期限切れのたびに呼ぶ | **最小の連携から必要** |
-| `session.css` | アプリと会話の表示領域を分ける | サイドバーを使うならコピーしてimportする |
+| `session.css` | アプリと会話の表示領域を分ける | `apps/todo` には配置済み。importするだけ |
 | `SessionControls` | 「新しいセッション」で会話を作り直す | 後から追加できる |
 | `SessionPending` | 会話ができるまでの表示と、失敗時の再試行 | 後から追加できる |
 | `SafeToolResult` | 短い操作表示・失敗状態・SDKの承認ボタンを表示 | 必要に応じて `SubakoChat` の `components` に渡す |
