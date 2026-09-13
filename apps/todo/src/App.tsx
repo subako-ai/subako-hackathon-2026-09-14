@@ -4,8 +4,61 @@ import data from "./data.json";
 import "./style.css";
 import "./layout.css";
 
+// ──────────────────────────────────────────────────────────────
+// TODO ① SDKと、コピーしてきた session.ts・CSS をimportする
+//    先に npm install と cp を済ませておきます。
+// ──────────────────────────────────────────────────────────────
+// import { z } from "zod";
+// import { SubakoSessionClient } from "@subako-ai/sdk";
+// import { SubakoProvider, useSession, useTool, useToolClient } from "@subako-ai/react";
+// import { SubakoChat } from "@subako-ai/assistant-ui";
+// import { fetchSessionToken, useSessionId } from "./session";
+// import "./session.css";
+
 const initialItems: Todo[] = parseTodos(data);
 const storageKey = "hackathon:todo";
+
+// ──────────────────────────────────────────────────────────────
+// TODO ② 会話につなぐクライアントを用意する
+//    APIキーは持ちません。会話ごとのtokenを開発サーバーから受け取ります。
+// ──────────────────────────────────────────────────────────────
+// const baseUrl = import.meta.env.VITE_SUBAKO_BASE_URL || "https://api.us.cloud.subako.ai";
+// const sessionStorageKey = `hackathon:session:todo:${baseUrl}`;
+// const subako = new SubakoSessionClient({ baseUrl, getToken: fetchSessionToken });
+
+// ──────────────────────────────────────────────────────────────
+// TODO ③ 会話を担当するコンポーネントを追加する
+//    execute の中身は、フォームが使っている add() をそのまま呼ぶだけです。
+// ──────────────────────────────────────────────────────────────
+// function TodoAssistant({ getItems, add, complete, sessionId }: {
+//   getItems: () => Todo[];
+//   add: (title: string) => Todo;
+//   complete: (id: string, done: boolean) => Todo;
+//   sessionId: string;
+// }) {
+//   const session = useSession(sessionId);
+//   const client = useToolClient(session, "todo");
+//
+//   useTool(client, "list_todos", {
+//     description: "現在のTODOを取得する。",
+//     schema: z.object({}).strict(),
+//     execute: () => JSON.stringify(getItems()),
+//   });
+//
+//   useTool(client, "add_todo", {
+//     description: "TODOを1件追加する。",
+//     schema: z.object({ title: z.string().max(300).trim().min(1) }).strict(),
+//     execute: ({ title }) => JSON.stringify(add(title)),
+//   });
+//
+//   // TODO ④ ここに完了ツールを足す。ここだけ雛形がありません。
+//   //   ツール名  set_todo_done
+//   //   説明      一覧で取得したidのTODOを完了・未完了にする。
+//   //   引数      id: string / done: boolean
+//   //   execute   complete(id, done) を呼び、JSON.stringify で返す
+//
+//   return <SubakoChat session={session} />;
+// }
 
 export default function App() {
   const [initial] = useState(() => {
@@ -21,6 +74,12 @@ export default function App() {
   const [error, setError] = useState(initial.error);
   const [title, setTitle] = useState("");
   const [filter, setFilter] = useState<"all" | "active" | "done">("all");
+
+  // ──────────────────────────────────────────────────────────────
+  // TODO ⑤ 使う会話を用意する
+  //    保存済みの会話があれば続きから、無ければ新しく作ります。
+  // ──────────────────────────────────────────────────────────────
+  // const { sessionId } = useSessionId(sessionStorageKey);
   const active = items.filter((item) => !item.done).length;
   const visible = items.filter(
     (item) => filter === "all" || (filter === "done" ? item.done : !item.done),
@@ -68,6 +127,8 @@ export default function App() {
     }
   }
   return (
+    // TODO ⑥-1 サイドバーを出すため、下の app-layout に has-session を足す
+    //    <div className="app-layout has-session">
     <div className="app-layout">
       <div className="app-panel">
         <div className="app-content">
@@ -184,6 +245,31 @@ export default function App() {
           </div>
         </div>
       </div>
+      {/*
+        TODO ⑥-2 会話のサイドバーを置く。app-panel の直後、app-layout の中です。
+
+        <aside className="session-sidebar" aria-label="TODOアシスタント">
+          <header className="session-header">
+            <h2>TODOアシスタント</h2>
+            <p>会話しながら、アプリを操作できます。</p>
+          </header>
+          <div className="session-content">
+            {sessionId ? (
+              <SubakoProvider client={subako}>
+                <TodoAssistant
+                  key={sessionId}
+                  getItems={getItems}
+                  add={add}
+                  complete={complete}
+                  sessionId={sessionId}
+                />
+              </SubakoProvider>
+            ) : (
+              <p>会話を準備しています…</p>
+            )}
+          </div>
+        </aside>
+      */}
     </div>
   );
 }
