@@ -1,7 +1,5 @@
 # 解答編：スターターから完成例への差分
 
-[参加者用ワークシートに戻る](../README.md)
-
 「普通のReactアプリのどこにSubakoを足したか」を答え合わせするための資料です。各節の折りたたみには、**このリポジトリの実ファイルから取得したdiff**を載せています。`+` は追加、`-` は削除、行頭が空白の行は変更していない前後のコードです。
 
 | 題材 | スターター | 完成例 | この資料 |
@@ -39,9 +37,9 @@
 | アプリのデータ保存キー | `hackathon:todo` | `subako-hackathon:ec:v1` | `hackathon-map-v1` |
 | 会話の保存キーのアプリ名 | `todo` | `ec` | `map` |
 
-会話の保存キーは、完成例と同じ `hackathon:session:<アプリ名>:<baseUrl>:<初期session ID>` の形にします。アプリのデータ保存キーとは別です。
+会話の保存キーは、完成例と同じ `hackathon:session:<アプリ名>:<baseUrl>` の形にします。アプリのデータ保存キーとは別です。
 
-CLIの導入、アカウント・workspace・APIキーの準備は[ワークシート](../README.md)を使います。その後、たとえばTODOならルートで次を実行します。EC・Mapは上の表に合わせます。
+CLIの導入、アカウント・workspace・APIキーの準備を済ませたら、たとえばTODOならルートで次を実行します。EC・Mapは上の表に合わせます。
 
 ```sh
 npm install --workspace @hackathon/todo @subako-ai/sdk@0.1.1 @subako-ai/react@0.1.1 @subako-ai/assistant-ui@0.1.1 @assistant-ui/react@0.15.19 @assistant-ui/react-markdown@0.14.15 zod@4.6.4
@@ -1736,7 +1734,7 @@ APIキーを持つのは開発サーバーだけです。[`scripts/subako-dev-ap
 
 どちらもブラウザーから直接呼べません。作成APIはCORSが許可されていないためです。一方、会話への接続とclient toolは、発行されたtokenでAPIへ直接つなぎます。こちらはagentの `allowed_origins` でOriginごとに許可されています。
 
-`vite.config.ts` は6アプリすべてに配線済みなので、追加の設定は要りません。自分の別リポジトリに導入する場合は、同じ2つの口を自分のサーバーに置きます。詳細な追加順序は[ワークシート](../README.md)の「任意：自分のTODOにも『新しいセッション』を追加する」を参照してください。
+`vite.config.ts` は6アプリすべてに配線済みなので、追加の設定は要りません。自分の別リポジトリに導入する場合は、同じ2つの口を自分のサーバーに置きます。
 
 - [ ] 新しいセッションで会話が空になり、アプリのデータは残った。
 - [ ] リロードしても、タブを閉じて開き直しても、同じ会話を再開できた。

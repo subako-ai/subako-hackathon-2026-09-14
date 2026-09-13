@@ -16,4 +16,4 @@ try {
   console.log(".env.local は作成済みです。設定を保持しました。");
 }
 console.log(`設定ファイル: ${fileURLToPath(new URL(".env.local", root))}`);
-console.log("起動: npm run dev -- todo ／ 手順: README.md");
+console.log("起動: npm run dev -- todo");
