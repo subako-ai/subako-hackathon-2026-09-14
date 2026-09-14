@@ -353,6 +353,8 @@ APIキーはルートの `.env.local` の `SUBAKO_API_KEY` に置きます。`VI
 
 **解答の中心は、`useCatalog` が返す `catalog` を会話コンポーネントへ渡すことです。** `CatalogView` と会話が同じカタログのstateと操作関数を使います。
 
+スターターの `App.tsx` には、TODOと同じ位置に ①〜⑥ のコメントで「どこに何を書くか」を示しています。コードは載せていないので、自分のTODO版を見ながら書きます。行き詰まったときに、この資料と完成例を見ます。
+
 | ツール | `execute` が使う値・関数 | アプリでの役割 |
 | --- | --- | --- |
 | `search_items` | `searchCatalog(catalog.getState().data.items, query, maxPrice)` | 商品検索。検索結果を返し、画面は変えない |
@@ -367,7 +369,7 @@ APIキーはルートの `.env.local` の `SUBAKO_API_KEY` に置きます。`VI
 
 `schema` にZodで引数の形と制約を定義します。SDKがAIへ渡すJSON Schemaを生成し、実行前に引数を検証します。`execute` の引数はそのスキーマから型が推論され、既存のアプリの操作を呼びます。在庫や予算などの業務ルールは、元からあるカタログの関数で検証します。最初は `search_items` と `show_items` の2つを追加すると、検索から画面への反映まで試せます。
 
-完成例の `useCatalog` には `getState()` を追加しています。元からある `latest` refから現在値を返し、更新直後の読み取りツールにも変更を伝えます。画面に渡す `state` と操作関数は保持します。この読み取り関数は連携時の変更で、スターターには追加していません。
+`useCatalog` の `getState()` は、元からある `latest` refから現在値を返し、更新直後の読み取りツールにも変更を伝えます。スターターにも最初からあるので、ツールの `execute` からは `catalog.state` ではなく `catalog.getState()` を読みます。`catalog.state` は描画時点の値なので、1回の応答で操作と読み取りが続くと古い値を返します。
 
 ### 変更するファイル
 
@@ -378,11 +380,10 @@ APIキーはルートの `.env.local` の `SUBAKO_API_KEY` に置きます。`VI
 | `src/SessionControls.tsx`（追加） | 会話の切り替えUI。全文は[追加UIの差分](#session-answer) |
 | `vite.config.ts` | 新しいセッションを作るAPIを追加 |
 | `src/CatalogView.tsx`・`src/style.css` | 完成例側の文言・商品イラストをコーヒー向けに編集 |
-| `src/useCatalog.ts` | 再描画前の現在値をツールから読む `getState()` を追加 |
 | `data/catalog.json` | 汎用の商品A〜Dからコーヒー豆のデータへ変更 |
 | `index.html`・`agents/ec-coffee/prompt.md` | 作品名と、コーヒー豆を提案する指示 |
 
-`src/model.ts`・`src/Dialog.tsx`・`src/layout.css`・`src/main.tsx`・`src/model.test.ts` と `data/schema.json` は同じ内容です。`src/CatalogView.tsx` と `src/style.css` は、完成例側でコーヒー作品の表示に編集しています。
+`src/model.ts`・`src/useCatalog.ts`・`src/Dialog.tsx`・`src/layout.css`・`src/main.tsx`・`src/model.test.ts` と `data/schema.json` は同じ内容です。`src/CatalogView.tsx` と `src/style.css` は、完成例側でコーヒー作品の表示に編集しています。
 
 ### コーヒーという題材の差分
 
@@ -428,7 +429,7 @@ SDK導入時は自分の `data/catalog.json`・`initialData`・`CatalogView` を
 ```diff
 --- apps/ec/src/App.tsx
 +++ apps/ec-coffee/src/App.tsx
-@@ -1,15 +1,153 @@
+@@ -1,59 +1,153 @@
 +import { useMemo, useState } from "react";
 +import { z } from "zod";
 +import { SubakoSessionClient } from "@subako-ai/sdk";
@@ -443,8 +444,21 @@ SDK導入時は自分の `data/catalog.json`・`initialData`・`CatalogView` を
 +import { fetchSessionToken, useSessionId } from "./session";
  import catalogData from "../data/catalog.json";
  
+-// ──────────────────────────────────────────────────────────────
+-// TODO ① SDKと、同じフォルダの session.ts をimportする
+-//    先に npm install --workspace @hackathon/ec ... を済ませてください。
+-//    TODO版で import したものに加えて、このアプリでは次も使います。
+-//      - 型 CatalogStore（./useCatalog）  会話コンポーネントの props に使う
+-//      - searchCatalog（./model）          検索ボックスと同じ検索関数
+-//    session.css は main.tsx がimport済みです。
+-// ──────────────────────────────────────────────────────────────
+-
  const initialData = validateCatalog(catalogData);
  
+-// ──────────────────────────────────────────────────────────────
+-// TODO ② 会話につなぐクライアントを用意する
+-//    TODO版の ② と同じ3行。会話の保存キーは `hackathon:session:ec:${baseUrl}` にします。
+-// ──────────────────────────────────────────────────────────────
 +function Assistant({
 +  sessionId,
 +  catalog,
@@ -537,7 +551,22 @@ SDK導入時は自分の `data/catalog.json`・`initialData`・`CatalogView` を
 +    execute: ({ id, quantity }) =>
 +      JSON.stringify(catalog.setQuantity(id, quantity)),
 +  });
-+
+ 
+-// ──────────────────────────────────────────────────────────────
+-// TODO ③ 会話を担当するコンポーネントを追加する
+-//    props は catalog: CatalogStore と sessionId: string。
+-//    useSession(sessionId) → useToolClient(session, "shop") → useTool を2つ → <SubakoChat />。
+-//
+-//    読むツール   search_items
+-//      引数      query: string（空なら全商品）
+-//      execute   searchCatalog(catalog.getState().data.items, query) を JSON.stringify で返す
+-//    画面を変える show_items
+-//      引数      ids: string[]
+-//      execute   catalog.showItems(ids) を呼び、返ってきたIDを返す
+-//
+-//    現在の状態は catalog.state ではなく catalog.getState() で読みます。
+-//    catalog.state は描画時点の値なので、1回の応答で操作→読み取りが続くと古くなります。
+-// ──────────────────────────────────────────────────────────────
 +  useTool(client, "replace_cart", {
 +    description: "カート全体を指定したセットに置き換える。予算がある場合はmaxTotalも渡す。予算・在庫の検証に失敗するとカートは一切変更しない。購入確定は行わない。",
 +    schema: z.object({
@@ -559,20 +588,33 @@ SDK導入時は自分の `data/catalog.json`・`initialData`・`CatalogView` を
 +      message: "購入確認を表示しました。画面の確定ボタンは利用者が押します。実際の決済はありません。",
 +    }),
 +  });
-+
+ 
+-//    TODO ④ ③の中に、自分のツールを足す。呼べる既存の関数:
+-//      get_cart           catalog.getState().cart と cartSummary(cart, items)（./model）
+-//      set_cart_quantity  catalog.setQuantity(id, quantity)
+-//      compare_items      catalog.compareItems(ids)（3点まで）
+-//      replace_cart       catalog.replaceCart(lines, maxTotal)
+-//      open_checkout      catalog.openCheckout()。確定ボタンは人が押す
+-//    どれも CatalogView.tsx のボタンが呼んでいる関数です。schema は Zod で引数の形を書きます。
+-//    行き詰まったら apps/ec-coffee/src/App.tsx と docs/answers.md を見てください。
 +  return (
 +    <SessionControls session={session} creating={creating} error={error} onNew={onNew}>
 +      <SubakoChat session={session} components={{ tools: { Fallback: SafeToolResult } }} />
 +    </SessionControls>
 +  );
 +}
-+
+ 
  export default function App() {
    const catalog = useCatalog({
      initialData,
 -    storageKey: "subako-hackathon:ec:v1",
 +    storageKey: "subako-hackathon:ec-coffee:v1",
    });
+-
+-  // ──────────────────────────────────────────────────────────────
+-  // TODO ⑤ 使う会話を用意する
+-  //    TODO版の ⑤ と同じ。useSessionId(保存キー) から sessionId を受け取ります。
+-  // ──────────────────────────────────────────────────────────────
 +  const baseUrl = import.meta.env.VITE_SUBAKO_BASE_URL || "https://api.us.cloud.subako.ai";
 +  const storageKey = `hackathon:session:ec-coffee:${baseUrl}`;
 +  const { sessionId, creating, error: sessionError, startNew } = useSessionId(storageKey);
@@ -585,7 +627,7 @@ SDK導入時は自分の `data/catalog.json`・`initialData`・`CatalogView` を
  
    return (
      <div className="app-layout has-session">
-@@ -19,14 +157,31 @@ export default function App() {
+@@ -63,19 +157,31 @@ export default function App() {
          </div>
          <div id="app-dialogs" className="app-dialog-host" />
        </div>
@@ -599,7 +641,12 @@ SDK導入時は自分の `data/catalog.json`・`initialData`・`CatalogView` を
 +          <p>好みや予算から、ぴったりの組み合わせを。</p>
          </header>
          <div className="session-content">
--          <p>ここに会話が入ります。TODOと同じ手順で、SubakoProvider と会話用のコンポーネントを置きます。</p>
+-          {/*
+-            TODO ⑥ 下の <p> を、TODO版の ⑥ と同じ形に差し替える。
+-              sessionId があれば <SubakoProvider client={subako}> の中に ③ のコンポーネントを
+-              key={sessionId} で置き、catalog と sessionId を渡す。無ければ準備中の <p> を出す。
+-          */}
+-          <p>ここに会話が入ります。</p>
 +          {sessionId ? (
 +            <SubakoProvider
 +              key={sessionId}
@@ -626,25 +673,6 @@ SDK導入時は自分の `data/catalog.json`・`initialData`・`CatalogView` を
 
 </details>
 
-
-<details>
-<summary>EC：現在の状態の読み取り — src/useCatalog.ts の実際のdiff</summary>
-
-```diff
---- apps/ec/src/useCatalog.ts
-+++ apps/ec-coffee/src/useCatalog.ts
-@@ -164,6 +164,8 @@ export function useCatalog({
- 
-   return {
-     state,
-+    // 再描画前に呼ばれる処理にも、現在の状態を返します。
-+    getState: () => latest.current,
-     storageError,
-     setQuantity,
-     replaceCart,
-```
-
-</details>
 
 <details>
 <summary>EC：vite.config.ts の実際のdiff</summary>
@@ -918,6 +946,8 @@ SDK導入時は自分の `data/catalog.json`・`initialData`・`CatalogView` を
 
 **解答の中心は、`useMapApp` が返す `app` を会話コンポーネントへ渡すことです。** 画面のボタンとAIのツールが、同じ訪問リストを更新します。
 
+スターターの `App.tsx` には、TODOと同じ位置に ①〜⑥ のコメントで「どこに何を書くか」を示しています。コードは載せていないので、自分のTODO版を見ながら書きます。行き詰まったときに、この資料と完成例を見ます。
+
 | ツール | `execute` が使う値・関数 | アプリでの役割 |
 | --- | --- | --- |
 | `get_places` | `app.getState().items` | 登録地点とmetadataを読む。キーワードがあれば絞り込む |
@@ -928,7 +958,7 @@ SDK導入時は自分の `data/catalog.json`・`initialData`・`CatalogView` を
 
 最初は `get_places` と `show_candidates` の2つで、登録地点を読んで地図に候補を出せます。検索は今の `app.getState().items` を読み、画面の更新には既存の関数を呼びます。
 
-完成例の `useMapApp` には `getState()` を追加しています。操作ごとに更新される既存の `current` refを読み、再描画を待たずに呼ばれるツールにも現在値を返します。画面は引き続き `state` を使います。スターターにはこの読み取り関数を先回りして用意せず、連携時の変更として示しています。
+`useMapApp` の `getState()` は、操作ごとに更新される既存の `current` refを読み、再描画を待たずに呼ばれるツールにも現在値を返します。スターターにも最初からあるので、ツールの `execute` からは `app.state` ではなく `app.getState()` を読みます。画面は引き続き `state` を使います。
 
 ### 変更するファイル
 
@@ -939,11 +969,10 @@ SDK導入時は自分の `data/catalog.json`・`initialData`・`CatalogView` を
 | `src/SessionControls.tsx`（追加） | 会話の切り替えUI。全文は[追加UIの差分](#session-answer) |
 | `vite.config.ts` | 新しいセッションを作るAPIを追加 |
 | `src/domain.ts`・`src/use-map-app.ts`・`src/map-canvas.tsx`・`src/map-view.tsx`・`src/domain.test.ts` | 完成例側に保存済み徒歩経路の計算・描画・表示とテストを追加 |
-| `src/use-map-app.ts` | 再描画前の現在値をツールから読む `getState()` も追加 |
 | `src/data.json`（変更）・`src/routes.json`（追加） | 架空の地点を渋谷周辺の店舗に置き換え、保存済みの徒歩経路を追加 |
 | `index.html`・`agents/map-coffee/prompt.md` | 作品名と、コーヒー屋巡りを提案する指示 |
 
-`src/Dialog.tsx`・`src/style.css`・`src/layout.css`・`src/main.tsx`・`src/use-map-app.test.ts` は同じ内容です。下記のアプリ機能の差分は、保存済み徒歩経路の計算・描画・表示・テストです。`use-map-app.ts` には連携用の `getState()` 追加も含まれます。スターターは経路データを扱わず、直線距離から概算します。
+`src/Dialog.tsx`・`src/style.css`・`src/layout.css`・`src/main.tsx`・`src/use-map-app.test.ts` は同じ内容です。下記のアプリ機能の差分は、保存済み徒歩経路の計算・描画・表示・テストです。スターターは経路データを扱わず、直線距離から概算します。
 
 ### コーヒーという題材の差分
 
@@ -997,7 +1026,7 @@ Mapの既定の出発地は画面にも表示している渋谷駅です。座�
 ```diff
 --- apps/map/src/App.tsx
 +++ apps/map-coffee/src/App.tsx
-@@ -1,12 +1,98 @@
+@@ -1,54 +1,98 @@
 +import { useMemo, useState } from "react";
 +import { z } from "zod";
 +import { SubakoSessionClient } from "@subako-ai/sdk";
@@ -1011,11 +1040,23 @@ Mapの既定の出発地は画面にも表示している渋谷駅です。座�
 +import { SessionControls, SessionPending, SafeToolResult } from "./SessionControls";
 +import { fetchSessionToken, useSessionId } from "./session";
  import data from "./data.json";
+-
+-// ──────────────────────────────────────────────────────────────
+-// TODO ① SDKと、同じフォルダの session.ts をimportする
+-//    先に npm install --workspace @hackathon/map ... を済ませてください。
+-//    TODO版で import したものに加えて、このアプリでは次も使います。
+-//      - 型 MapApp（./use-map-app）  会話コンポーネントの props に使う
+-//    session.css は main.tsx がimport済みです。
+-// ──────────────────────────────────────────────────────────────
 +import routeData from "./routes.json";
  
  const initialItems = parseMapItems(data);
 +const walkingRoutes = routeData as WalkingRoute[];
-+
+ 
+-// ──────────────────────────────────────────────────────────────
+-// TODO ② 会話につなぐクライアントを用意する
+-//    TODO版の ② と同じ3行。会話の保存キーは `hackathon:session:map:${baseUrl}` にします。
+-// ──────────────────────────────────────────────────────────────
 +// 経路の全座標は省き、判断に必要な距離と所要時間を渡します。
 +function mapResult(state: MapState) {
 +  const summary = getVisitSummary(state.items, state.visitIds, walkingRoutes);
@@ -1027,7 +1068,22 @@ Mapの既定の出発地は画面にも表示している渋谷駅です。座�
 +    },
 +  });
 +}
-+
+ 
+-// ──────────────────────────────────────────────────────────────
+-// TODO ③ 会話を担当するコンポーネントを追加する
+-//    props は app: MapApp と sessionId: string。
+-//    useSession(sessionId) → useToolClient(session, "map") → useTool を2つ → <SubakoChat />。
+-//
+-//    読むツール   get_places
+-//      引数      なし（z.object({}).strict()）
+-//      execute   app.getState().items を JSON.stringify で返す。metadata も一緒に渡る
+-//    画面を変える show_candidates
+-//      引数      ids: string[]
+-//      execute   app.showCandidates(ids) を呼び、返ってきたIDを返す
+-//
+-//    現在の状態は app.state ではなく app.getState() で読みます。
+-//    app.state は描画時点の値なので、1回の応答で操作→読み取りが続くと古くなります。
+-// ──────────────────────────────────────────────────────────────
 +function MapAssistant({ app, sessionId, creating, error, onNew }: {
 +  app: MapApp;
 +  sessionId: string;
@@ -1037,7 +1093,14 @@ Mapの既定の出発地は画面にも表示している渋谷駅です。座�
 +}) {
 +  const session = useSession(sessionId);
 +  const client = useToolClient(session, "coffee-map");
-+
+ 
+-//    TODO ④ ③の中に、自分のツールを足す。呼べる既存の関数:
+-//      get_map_state    app.getState() と app.getVisitSummary()（距離・移動時間の概算）
+-//      set_visit_order  app.setVisitOrder(ids)。固定した地点は外せない
+-//      set_pinned       app.setPinned(id, pinned)
+-//    どれも map-view.tsx のボタンが呼んでいる関数です。schema は Zod で引数の形を書きます。
+-//    出発地は domain.ts の SHIBUYA_STATION で固定です。別の街にするならここも変えます。
+-//    行き詰まったら apps/map-coffee/src/App.tsx と docs/answers.md を見てください。
 +  // 既存の画面操作を、ここでエージェントのツールとして登録します。
 +  useTool(client, "get_places", {
 +    description: "地点を取得する。metadataには画面に出していない特徴や情報の出典が含まれる。まず全件取得し、ユーザーの好みと比較する。",
@@ -1076,7 +1139,9 @@ Mapの既定の出発地は画面にも表示している渋谷駅です。座�
 +    execute: ({ id, pinned }) =>
 +      JSON.stringify({ pinnedIds: app.setPinned(id, pinned) }),
 +  });
-+
+ 
+-export default function App() {
+-  const app = useMapApp(initialItems, "hackathon-map-v1");
 +  return (
 +    <SessionControls session={session} creating={creating} error={error} onNew={onNew}>
 +      <SubakoChat session={session} components={{ tools: { Fallback: SafeToolResult } }} />
@@ -1084,8 +1149,11 @@ Mapの既定の出発地は画面にも表示している渋谷駅です。座�
 +  );
 +}
  
- export default function App() {
--  const app = useMapApp(initialItems, "hackathon-map-v1");
+-  // ──────────────────────────────────────────────────────────────
+-  // TODO ⑤ 使う会話を用意する
+-  //    TODO版の ⑤ と同じ。useSessionId(保存キー) から sessionId を受け取ります。
+-  // ──────────────────────────────────────────────────────────────
++export default function App() {
 +  const app = useMapApp(initialItems, "hackathon-map-coffee-v1", walkingRoutes);
 +  const baseUrl = import.meta.env.VITE_SUBAKO_BASE_URL?.trim() || "https://api.us.cloud.subako.ai";
 +  const storageKey = `hackathon:session:map-coffee:${baseUrl}`;
@@ -1099,7 +1167,7 @@ Mapの既定の出発地は画面にも表示している渋谷駅です。座�
  
    return (
      <div className="app-layout has-session">
-@@ -14,20 +100,38 @@ export default function App() {
+@@ -56,25 +100,38 @@ export default function App() {
          <div className="app-content">
            <MapView
              app={app}
@@ -1122,7 +1190,12 @@ Mapの既定の出発地は画面にも表示している渋谷駅です。座�
 +          <p>好みや空き時間から、一緒に考えます。</p>
          </header>
          <div className="session-content">
--          <p>ここに会話が入ります。TODOと同じ手順で、SubakoProvider と会話用のコンポーネントを置きます。</p>
+-          {/*
+-            TODO ⑥ 下の <p> を、TODO版の ⑥ と同じ形に差し替える。
+-              sessionId があれば <SubakoProvider client={subako}> の中に ③ のコンポーネントを
+-              key={sessionId} で置き、app と sessionId を渡す。無ければ準備中の <p> を出す。
+-          */}
+-          <p>ここに会話が入ります。</p>
 +          {connectionError && (
 +            <div className="session-notice session-error" role="alert">
 +              {connectionError}
@@ -1319,7 +1392,7 @@ Mapの既定の出発地は画面にも表示している渋谷駅です。座�
 </details>
 
 <details>
-<summary>Map：現在値の読み取りと徒歩経路 — src/use-map-app.ts の実際のdiff</summary>
+<summary>Map：徒歩経路機能の追加 — src/use-map-app.ts の実際のdiff</summary>
 
 ```diff
 --- apps/map/src/use-map-app.ts
@@ -1340,15 +1413,7 @@ Mapの既定の出発地は画面にも表示している渋谷駅です。座�
  ) {
    const [loaded] = useState(() => {
      try {
-@@ -65,10 +67,15 @@ export function useMapApp(
-     state,
-     notice,
-     setNotice,
-+    getState() {
-+      // 再描画前に続けて呼ばれても、最新の変更を返します。
-+      return current.current;
-+    },
-     getVisitSummary() {
+@@ -73,6 +75,7 @@ export function useMapApp(
        return getVisitSummary(
          current.current.items,
          current.current.visitIds,

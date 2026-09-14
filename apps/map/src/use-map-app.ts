@@ -65,6 +65,10 @@ export function useMapApp(
     state,
     notice,
     setNotice,
+    getState() {
+      // 再描画前に続けて呼ばれても、最新の変更を返します。
+      return current.current;
+    },
     getVisitSummary() {
       return getVisitSummary(
         current.current.items,

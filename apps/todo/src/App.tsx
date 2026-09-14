@@ -253,7 +253,7 @@ export default function App() {
         <div className="session-content">
           <p>ここに会話が入ります。</p>
           {/*
-            TODO ⑥ 上の <p> を消して、ここから下を有効にします。
+            TODO ⑥ 上の <p> と、このコメントの始まりの行・終わりの行を消して、下を有効にします。
 
             {sessionId ? (
               <SubakoProvider client={subako}>

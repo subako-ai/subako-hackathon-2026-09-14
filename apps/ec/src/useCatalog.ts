@@ -164,6 +164,8 @@ export function useCatalog({
 
   return {
     state,
+    // 再描画前に呼ばれる処理にも、現在の状態を返します。
+    getState: () => latest.current,
     storageError,
     setQuantity,
     replaceCart,
